@@ -1,0 +1,16 @@
+[package]
+name = "game_token"
+version = "1.0.0"
+authors = []
+
+[addresses]
+game_token="0x949fc44a7007f866344b1e6c120232dc1aa32a1872c11c966fd61efc021c2656"
+
+[dev-addresses]
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dev-dependencies]

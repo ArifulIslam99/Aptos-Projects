@@ -3,7 +3,7 @@ module game_token::game_fa {
     use aptos_framework::object::{Self, Object};
     use aptos_framework::primary_fungible_store;
     use std::option;
-    use std::signer;
+    use std::signer; 
     use std::string::{Self, String};
 
     /// Error codes

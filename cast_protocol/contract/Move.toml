@@ -1,0 +1,13 @@
+[package]
+name = "cast_protocol"
+version = "1.0.0"
+authors = []
+
+[addresses]
+cast_protocol_addr = "_"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", rev = "mainnet", subdir = "aptos-framework" }
+AptosTokenObjects = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token-objects", rev = "mainnet" }
+
+[dev-dependencies]

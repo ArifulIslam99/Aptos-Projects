@@ -8,7 +8,7 @@ async function test() {
   await move.test({
     packageDirectoryPath: "contract",
     namedAddresses: {
-      cast_protocol_addr: "0x100",
+      channelz_protocol_addr: "0x100",
     },
   });
 }

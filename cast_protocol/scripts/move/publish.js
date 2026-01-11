@@ -22,10 +22,10 @@ async function publish() {
   move
     .createObjectAndPublishPackage({
       packageDirectoryPath: "contract",
-      addressName: "cast_protocol_addr",
+      addressName: "neo_protocol_addr",
       namedAddresses: {
         // Publish module to new object, but since we create the object on the fly, we fill in the publisher's account address here
-        cast_protocol_addr: process.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+        neo_protocol_addr: process.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS,
       },
       extraArguments: [`--private-key=${process.env.VITE_MODULE_PUBLISHER_ACCOUNT_PRIVATE_KEY}`,`--url=${aptosSDK.NetworkToNodeAPI[process.env.VITE_APP_NETWORK]}`],
     })

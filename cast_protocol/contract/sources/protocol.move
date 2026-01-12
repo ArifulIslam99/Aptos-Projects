@@ -5,6 +5,7 @@ module neo_protocol_addr::account {
     use aptos_framework::object::{Self, ExtendRef};
     use aptos_framework::event;
     use aptos_std::table::{Self, Table};
+    use neo_protocol_addr::channelz;
 
     // Error codes
     /// The account already exists for this user
@@ -99,6 +100,8 @@ module neo_protocol_addr::account {
         // Register in global registry
         registry.accounts.add(user_addr, account_address);
 
+        channelz::mint_channelz(user, full_name);
+
         // Emit event
         event::emit(AccountCreatedEvent {
             owner: user_addr,
@@ -119,8 +122,9 @@ module neo_protocol_addr::account {
         
         // Get both account objects
         let registry = borrow_global<AccountRegistry>(@neo_protocol_addr);
-        
+        assert!(registry.accounts.contains(subscriber_addr), E_ACCOUNT_NOT_FOUND);
         let subscriber_account_addr = *registry.accounts.borrow(subscriber_addr);
+
         assert!(registry.accounts.contains(target_owner), E_ACCOUNT_NOT_FOUND);
         let target_account_addr = *registry.accounts.borrow(target_owner);
 

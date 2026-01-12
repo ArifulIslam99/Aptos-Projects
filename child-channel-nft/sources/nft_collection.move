@@ -11,7 +11,9 @@ module child_channel::nft_collection {
 
     /// Error codes
     const ENOT_AUTHORIZED: u64 = 1;
+    /// Invalid payment amount
     const EINVALID_PAYMENT: u64 = 2;
+    /// Collection not found
     const ECOLLECTION_NOT_FOUND: u64 = 3;
 
     /// Collection configuration
@@ -94,7 +96,7 @@ module child_channel::nft_collection {
         });
 
         // Increment mint count
-        collection_data.mint_count = collection_data.mint_count + 1;
+        collection_data.mint_count += 1;
 
         // The token is automatically transferred to the minter
     }

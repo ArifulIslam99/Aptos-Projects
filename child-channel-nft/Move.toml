@@ -1,10 +1,10 @@
 [package]
-name = "child_channel"
+name = "std_channel"
 version = "1.0.0"
 authors = []
 
 [addresses]
-child_channel = "_"
+std_channel = "_"
 
 [dev-addresses]
 

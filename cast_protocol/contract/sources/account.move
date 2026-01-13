@@ -107,8 +107,8 @@ module neo_protocol_addr::account {
 
         // Register in global registry
         registry.accounts.add(user_addr, account_address);
-        // registry.channelz_name.push_back(full_name);
-        // channelz::mint_channelz(user, full_name);
+        registry.channelz_name.push_back(full_name);
+        channelz::mint_channelz(user, full_name);
 
         // Emit event
         event::emit(AccountCreatedEvent {

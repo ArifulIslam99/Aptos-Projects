@@ -5,6 +5,7 @@ module neo_protocol_addr::account {
     use aptos_framework::object::{Self, ExtendRef};
     use aptos_framework::event;
     use aptos_std::table::{Self, Table};
+    use neo_protocol_addr::moderation;
     use neo_protocol_addr::channelz;
 
     // Error codes
@@ -20,6 +21,10 @@ module neo_protocol_addr::account {
     const E_ACCOUNT_NOT_FOUND: u64 = 5;
     /// A user cannot subscribe to their own account
     const E_CANNOT_SUBSCRIBE_TO_SELF: u64 = 6;
+    /// The provided name is unavailable
+    const E_NAME_UNAVAILABLE: u64 = 7;
+    // /// The provided name is blocklisted    
+    // const E_NAME_BLOCKLISTED: u64 = 8;
 
     // Account configuration
     struct AccountConfig has store, drop, copy {
@@ -39,6 +44,7 @@ module neo_protocol_addr::account {
     // Global registry to track owner -> account object mapping
     struct AccountRegistry has key {
         accounts: Table<address, address>, // owner_address -> account_object_address
+        channelz_name: vector<String>
     }
 
     // Events
@@ -66,6 +72,7 @@ module neo_protocol_addr::account {
         // Create global registry
         move_to(deployer, AccountRegistry {
             accounts: table::new(),
+            channelz_name: vector::empty(),
         });
     }
 
@@ -75,11 +82,12 @@ module neo_protocol_addr::account {
         full_name: String,
     ) acquires AccountRegistry {
         let user_addr = signer::address_of(user);
+        assert!(query_name(full_name) == 3, E_NAME_UNAVAILABLE);
         
         // Ensure user doesn't already have an account
         let registry = borrow_global_mut<AccountRegistry>(@neo_protocol_addr);
         assert!(!registry.accounts.contains(user_addr), E_ACCOUNT_ALREADY_EXISTS);
-
+        
         // Create account object
         let constructor_ref = object::create_object(user_addr);
         let object_signer = object::generate_signer(&constructor_ref);
@@ -99,8 +107,8 @@ module neo_protocol_addr::account {
 
         // Register in global registry
         registry.accounts.add(user_addr, account_address);
-
-        channelz::mint_channelz(user, full_name);
+        // registry.channelz_name.push_back(full_name);
+        // channelz::mint_channelz(user, full_name);
 
         // Emit event
         event::emit(AccountCreatedEvent {
@@ -264,5 +272,19 @@ module neo_protocol_addr::account {
             account.subscribers.length(),
             account.subscribed_to.length()
         )
+    }
+
+    #[view]
+    public fun query_name(name: String): u8 acquires AccountRegistry {
+        let registry = borrow_global_mut<AccountRegistry>(@neo_protocol_addr);
+        if(registry.channelz_name.contains(&name)){
+            return 0
+        } else if(moderation::is_blacklisted(name)) {
+            return 1
+        } else if(moderation::is_blocklisted(name)) {
+            return 2
+        } else {
+            return 3
+        }
     }
 }

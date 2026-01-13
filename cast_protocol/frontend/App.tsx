@@ -1,14 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Aptos, 
   AptosConfig, 
   Network,
   EphemeralKeyPair,
-  KeylessAccount,
 } from '@aptos-labs/ts-sdk';
 import { jwtDecode } from 'jwt-decode';
 
-// Type definitions for Google Sign-In
+// ==================== TYPES ====================
 interface GoogleUser {
   email: string;
   name: string;
@@ -61,49 +60,38 @@ interface KeylessAccountData {
   userData: GoogleUser;
 }
 
-// Extend Window interface
+interface AccountInfo {
+  exists: boolean;
+  fullName?: string;
+  subscriptionEnabled?: boolean;
+  subscriberCount?: number;
+  subscribedToCount?: number;
+}
+
 declare global {
   interface Window {
     google?: GoogleAccounts;
+    aptos?: any;
   }
 }
 
-// Configuration
+// ==================== CONFIG ====================
 const APTOS_CONFIG = new AptosConfig({ network: Network.DEVNET });
 const aptos = new Aptos(APTOS_CONFIG);
-
-// IMPORTANT: Replace with your Google OAuth Client ID
 const GOOGLE_CLIENT_ID = '305427741136-j3j4r125hp5sqp5ojjdvcf5oomerckfn.apps.googleusercontent.com';
+const MODULE_ADDRESS = '0xdfdda8374ca5e0dbe9fc21237c85295f120c7012c6344d96acf19d72a7236314';
 
-function App() {
-  const [user, setUser] = useState<GoogleUser | null>(null);
-  const [keylessAccount, setKeylessAccount] = useState<KeylessAccountData | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string>('');
-  
-  // Use ref instead of state to avoid timing issues
+// ==================== SIGN IN COMPONENT ====================
+const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData) => void }> = ({ onSignIn }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const ephemeralKeyPairRef = useRef<EphemeralKeyPair | null>(null);
 
-  // Initialize Google Sign-In on component mount
   useEffect(() => {
     loadGoogleScript();
-    
-    // Check if user was previously logged in
-    const savedAccount = localStorage.getItem('keyless_account');
-    if (savedAccount) {
-      try {
-        const accountData: KeylessAccountData = JSON.parse(savedAccount);
-        setKeylessAccount(accountData);
-        setUser(accountData.userData);
-      } catch (err) {
-        console.error('Failed to restore session:', err);
-        localStorage.removeItem('keyless_account');
-      }
-    }
   }, []);
 
-  // Load Google Sign-In script
-  const loadGoogleScript = (): void => {
+  const loadGoogleScript = () => {
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
@@ -112,16 +100,11 @@ function App() {
     document.head.appendChild(script);
   };
 
-  // Initialize Google Sign-In
-  const initializeGoogleSignIn = (): void => {
+  const initializeGoogleSignIn = () => {
     if (!window.google) return;
 
-    // Generate ephemeral key pair and store in ref
     const ephemeral = EphemeralKeyPair.generate();
     ephemeralKeyPairRef.current = ephemeral;
-    
-    console.log('Ephemeral key pair generated:', ephemeral);
-    console.log('Nonce:', ephemeral.nonce);
 
     window.google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
@@ -131,33 +114,24 @@ function App() {
 
     const buttonDiv = document.getElementById('googleSignInButton');
     if (buttonDiv) {
-      window.google.accounts.id.renderButton(
-        buttonDiv,
-        {
-          theme: 'outline',
-          size: 'large',
-          text: 'signin_with',
-          shape: 'rectangular',
-          width: 280
-        }
-      );
+      window.google.accounts.id.renderButton(buttonDiv, {
+        theme: 'filled_blue',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'pill',
+        width: 300
+      });
     }
   };
 
-  // Handle Google Sign-In callback
-  const handleGoogleCallback = async (response: GoogleCredentialResponse): Promise<void> => {
+  const handleGoogleCallback = async (response: GoogleCredentialResponse) => {
     setLoading(true);
     setError('');
 
     try {
       const jwt = response.credential;
-      
-      console.log('=== Google Sign-In Callback ===');
-      console.log('JWT received:', jwt.substring(0, 50) + '...');
-      console.log('Ephemeral key pair exists:', !!ephemeralKeyPairRef.current);
-      
-      // Decode JWT to get user info
       const payload = jwtDecode<JWTPayload>(jwt);
+      
       const userData: GoogleUser = {
         email: payload.email,
         name: payload.name,
@@ -165,376 +139,637 @@ function App() {
         sub: payload.sub,
       };
 
-      console.log('User data decoded:', userData);
+      if (!ephemeralKeyPairRef.current) {
+        throw new Error('Ephemeral key pair not generated');
+      }
 
-      // Create Keyless Account
-      const keylessAccountObj = await createKeylessAccount(jwt);
-      
-      const accountData: KeylessAccountData = {
-        address: keylessAccountObj.accountAddress.toString(),
-        userData: userData,
-      };
-
-      setUser(userData);
-      setKeylessAccount(accountData);
-
-      // Save to localStorage for persistence
-      localStorage.setItem('keyless_account', JSON.stringify(accountData));
-
-      console.log('✅ Keyless Account Created Successfully!');
-      console.log('Account Address:', keylessAccountObj.accountAddress.toString());
-      
-    } catch (err) {
-      console.error('❌ Keyless account creation failed:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      setError('Failed to create Keyless account: ' + errorMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Create Keyless Account from JWT
-  const createKeylessAccount = async (jwt: string): Promise<KeylessAccount> => {
-    console.log('=== Creating Keyless Account ===');
-    
-    // Check if ephemeral key pair exists
-    if (!ephemeralKeyPairRef.current) {
-      console.error('❌ Ephemeral key pair is null!');
-      throw new Error('Ephemeral key pair not generated. Please refresh and try again.');
-    }
-
-    console.log('✅ Ephemeral key pair exists');
-
-    try {
-      // Decode JWT to get iss (issuer)
-      const payload = jwtDecode<JWTPayload>(jwt);
-      console.log('JWT Issuer:', payload.iss);
-      console.log('JWT Subject:', payload.sub);
-
-      // Derive Keyless Account
-      console.log('Calling aptos.deriveKeylessAccount...');
-      const keylessAccount = await aptos.deriveKeylessAccount({
+      const keylessAccountObj = await aptos.deriveKeylessAccount({
         jwt,
         ephemeralKeyPair: ephemeralKeyPairRef.current,
         uidKey: 'sub',
       });
 
-      console.log('✅ Keyless account derived successfully');
-      return keylessAccount;
+      const accountData: KeylessAccountData = {
+        address: keylessAccountObj.accountAddress.toString(),
+        userData: userData,
+      };
+
+      localStorage.setItem('keyless_account', JSON.stringify(accountData));
+      onSignIn(userData, accountData);
       
     } catch (err) {
-      console.error('❌ Error in createKeylessAccount:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      throw new Error('Failed to derive keyless account: ' + errorMessage);
-    }
-  };
-
-  // Sign out
-  const handleSignOut = (): void => {
-    setUser(null);
-    setKeylessAccount(null);
-    ephemeralKeyPairRef.current = null;
-    localStorage.removeItem('keyless_account');
-    window.google?.accounts.id.disableAutoSelect();
-    
-    // Reinitialize for next sign-in
-    setTimeout(() => {
-      initializeGoogleSignIn();
-    }, 100);
-  };
-
-  // Copy address to clipboard
-  const copyAddress = (): void => {
-    if (keylessAccount?.address) {
-      navigator.clipboard.writeText(keylessAccount.address);
-      alert('Address copied to clipboard!');
+      setError('Authentication failed: ' + errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div style={{
       minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '2rem',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+      padding: '2rem'
     }}>
       <div style={{
-        maxWidth: '600px',
-        margin: '0 auto',
         background: 'white',
-        borderRadius: '20px',
-        padding: '2.5rem',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+        borderRadius: '24px',
+        padding: '3rem',
+        maxWidth: '500px',
+        width: '100%',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+        textAlign: 'center'
       }}>
-        {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 style={{
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            marginBottom: '0.5rem'
-          }}>
-            🔐 Aptos Keyless Auth
-          </h1>
-          <p style={{ color: '#666', fontSize: '1rem' }}>
-            Sign in with Google - No wallet needed!
-          </p>
-        </div>
+        <div style={{
+          fontSize: '4rem',
+          marginBottom: '1rem'
+        }}>📺</div>
+        
+        <h1 style={{
+          fontSize: '2.5rem',
+          fontWeight: 'bold',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          marginBottom: '0.5rem'
+        }}>
+          Welcome to Channelz
+        </h1>
+        
+        <p style={{
+          color: '#666',
+          fontSize: '1.1rem',
+          marginBottom: '2rem'
+        }}>
+          Create your decentralized channel on Aptos blockchain
+        </p>
 
-        {/* Error Message */}
         {error && (
           <div style={{
             padding: '1rem',
             background: '#fee',
             border: '1px solid #fcc',
-            borderRadius: '8px',
+            borderRadius: '12px',
             color: '#c33',
-            marginBottom: '1rem',
+            marginBottom: '1.5rem',
             fontSize: '0.9rem'
           }}>
             ⚠️ {error}
           </div>
         )}
 
-        {/* Loading State */}
-        {loading && (
-          <div style={{
-            padding: '1.5rem',
-            background: '#f0f0f0',
-            borderRadius: '12px',
-            textAlign: 'center',
-            marginBottom: '1rem'
-          }}>
-            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⏳</div>
-            <div style={{ color: '#666' }}>Creating your Keyless account...</div>
-            <div style={{ color: '#999', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-              This may take a few seconds...
-            </div>
+        {loading ? (
+          <div style={{ padding: '2rem' }}>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
+            <div style={{ color: '#666' }}>Authenticating...</div>
           </div>
-        )}
-
-        {/* Not Signed In */}
-        {!user && !loading && (
-          <div>
-            <div style={{
-              textAlign: 'center',
-              marginBottom: '2rem'
-            }}>
-              <p style={{ 
-                marginBottom: '1.5rem', 
-                color: '#666',
-                fontSize: '1rem'
-              }}>
-                Click the button below to sign in with your Google account
-              </p>
-              
-              <div id="googleSignInButton" style={{
-                display: 'flex',
-                justifyContent: 'center',
-                marginBottom: '2rem'
-              }}></div>
-            </div>
-
-            {/* Info Box */}
-            <div style={{
-              padding: '1.5rem',
-              background: '#f8f9ff',
-              border: '2px solid #e0e7ff',
-              borderRadius: '12px',
-              fontSize: '0.9rem',
-              color: '#4338ca'
-            }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.75rem', fontSize: '1rem' }}>
-                🌟 What is Aptos Keyless?
-              </div>
-              <ul style={{ 
-                margin: 0, 
-                paddingLeft: '1.5rem',
-                lineHeight: '1.8'
-              }}>
-                <li>No browser extension needed</li>
-                <li>No seed phrases to remember</li>
-                <li>Sign in with your Google account</li>
-                <li>Your account is secured by OpenID Connect</li>
-                <li>Works on any device instantly</li>
-              </ul>
-            </div>
-
-            {/* Debug Info */}
-            <div style={{
-              marginTop: '1.5rem',
-              padding: '1rem',
-              background: '#f0f0f0',
-              border: '1px solid #ddd',
-              borderRadius: '8px',
-              fontSize: '0.8rem',
-              color: '#666',
-              fontFamily: 'monospace'
-            }}>
-              <strong>Debug Info:</strong><br/>
-              Ephemeral Key Pair: {ephemeralKeyPairRef.current ? '✅ Generated' : '❌ Not Generated'}<br/>
-              Network: Devnet
-            </div>
-          </div>
-        )}
-
-        {/* Signed In */}
-        {user && keylessAccount && (
-          <div>
-            {/* User Profile */}
-            <div style={{
+        ) : (
+          <>
+            <div id="googleSignInButton" style={{
               display: 'flex',
-              alignItems: 'center',
-              gap: '1rem',
-              padding: '1.5rem',
-              background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-              borderRadius: '12px',
-              marginBottom: '1.5rem',
-              border: '2px solid #0ea5e9'
-            }}>
-              <img 
-                src={user.picture} 
-                alt={user.name}
-                style={{
-                  width: '70px',
-                  height: '70px',
-                  borderRadius: '50%',
-                  border: '3px solid white',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                }}
-              />
-              <div style={{ flex: 1 }}>
-                <div style={{ 
-                  fontWeight: 'bold', 
-                  fontSize: '1.2rem',
-                  color: '#0c4a6e',
-                  marginBottom: '0.25rem'
-                }}>
-                  {user.name}
-                </div>
-                <div style={{ 
-                  color: '#0369a1', 
-                  fontSize: '0.9rem' 
-                }}>
-                  {user.email}
-                </div>
-              </div>
-              <button
-                onClick={handleSignOut}
-                style={{
-                  padding: '0.6rem 1.2rem',
-                  background: '#ef4444',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  fontWeight: '600',
-                  transition: 'all 0.2s'
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.background = '#dc2626')}
-                onMouseOut={(e) => (e.currentTarget.style.background = '#ef4444')}
-              >
-                Sign Out
-              </button>
-            </div>
-
-            {/* Keyless Account Info */}
-            <div style={{
-              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-              border: '2px solid #f59e0b',
-              borderRadius: '12px',
-              padding: '1.5rem',
+              justifyContent: 'center',
               marginBottom: '1.5rem'
-            }}>
-              <div style={{
-                fontWeight: 'bold',
-                color: '#92400e',
-                marginBottom: '1rem',
-                fontSize: '1.1rem'
-              }}>
-                ✅ Keyless Account Created!
-              </div>
-              
-              <div style={{ marginBottom: '0.75rem' }}>
-                <div style={{ 
-                  fontSize: '0.85rem', 
-                  color: '#78350f',
-                  fontWeight: '600',
-                  marginBottom: '0.5rem'
-                }}>
-                  Your Aptos Address:
-                </div>
-                <div style={{
-                  background: 'white',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  fontFamily: 'monospace',
-                  fontSize: '0.8rem',
-                  wordBreak: 'break-all',
-                  color: '#1e293b',
-                  border: '1px solid #fbbf24'
-                }}>
-                  {keylessAccount.address}
-                </div>
-              </div>
-
-              <button
-                onClick={copyAddress}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  background: '#f59e0b',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  fontWeight: '600',
-                  transition: 'all 0.2s'
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.background = '#d97706')}
-                onMouseOut={(e) => (e.currentTarget.style.background = '#f59e0b')}
-              >
-                📋 Copy Address
-              </button>
-            </div>
-
-            {/* Success Info */}
-            <div style={{
-              padding: '1.5rem',
-              background: '#dcfce7',
-              border: '2px solid #22c55e',
-              borderRadius: '12px',
+            }}></div>
+            
+            <p style={{
               fontSize: '0.9rem',
-              color: '#166534'
+              color: '#999'
             }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.75rem' }}>
-                🎉 Authentication Successful!
-              </div>
-              <div style={{ lineHeight: '1.6' }}>
-                You now have a blockchain account secured by your Google login. 
-                No private keys to manage, no seed phrases to remember. 
-                Your account is ready to use with any Aptos dApp!
-              </div>
-            </div>
-
-            {/* Network Info */}
-            <div style={{
-              marginTop: '1.5rem',
-              padding: '1rem',
-              background: '#f1f5f9',
-              borderRadius: '8px',
-              fontSize: '0.85rem',
-              color: '#475569',
-              textAlign: 'center'
-            }}>
-              <strong>Network:</strong> Aptos Devnet
-            </div>
-          </div>
+              Powered by Aptos Keyless Authentication
+            </p>
+          </>
         )}
+      </div>
+    </div>
+  );
+};
+
+// ==================== PROFILE SIDEBAR ====================
+const ProfileSidebar: React.FC<{
+  user: GoogleUser;
+  address: string;
+  balance: string;
+  onSignOut: () => void;
+}> = ({ user, address, balance, onSignOut }) => {
+  return (
+    <div style={{
+      width: '280px',
+      background: 'white',
+      borderRadius: '16px',
+      padding: '1.5rem',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+      height: 'fit-content',
+      position: 'sticky',
+      top: '2rem'
+    }}>
+      <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+        <img 
+          src={user.picture} 
+          alt={user.name}
+          style={{
+            width: '100px',
+            height: '100px',
+            borderRadius: '50%',
+            border: '4px solid #667eea',
+            marginBottom: '1rem'
+          }}
+        />
+        <h3 style={{
+          margin: '0 0 0.25rem 0',
+          fontSize: '1.2rem',
+          color: '#1a202c'
+        }}>
+          {user.name}
+        </h3>
+        <p style={{
+          margin: 0,
+          fontSize: '0.85rem',
+          color: '#718096'
+        }}>
+          {user.email}
+        </p>
+      </div>
+
+      <div style={{
+        padding: '1rem',
+        background: '#f7fafc',
+        borderRadius: '12px',
+        marginBottom: '1rem'
+      }}>
+        <div style={{
+          fontSize: '0.75rem',
+          color: '#718096',
+          marginBottom: '0.5rem',
+          fontWeight: '600'
+        }}>
+          APTOS ADDRESS
+        </div>
+        <div style={{
+          fontSize: '0.75rem',
+          fontFamily: 'monospace',
+          color: '#2d3748',
+          wordBreak: 'break-all'
+        }}>
+          {address.slice(0, 6)}...{address.slice(-4)}
+        </div>
+      </div>
+
+      <div style={{
+        padding: '1rem',
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        borderRadius: '12px',
+        marginBottom: '1.5rem',
+        color: 'white'
+      }}>
+        <div style={{
+          fontSize: '0.75rem',
+          marginBottom: '0.5rem',
+          opacity: 0.9
+        }}>
+          BALANCE
+        </div>
+        <div style={{
+          fontSize: '1.5rem',
+          fontWeight: 'bold'
+        }}>
+          {balance} APT
+        </div>
+      </div>
+
+      <button
+        onClick={onSignOut}
+        style={{
+          width: '100%',
+          padding: '0.75rem',
+          background: '#f56565',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          fontSize: '0.9rem',
+          fontWeight: '600',
+          transition: 'all 0.2s'
+        }}
+        onMouseOver={(e) => (e.currentTarget.style.background = '#e53e3e')}
+        onMouseOut={(e) => (e.currentTarget.style.background = '#f56565')}
+      >
+        Sign Out
+      </button>
+    </div>
+  );
+};
+
+// ==================== MAIN CONTENT AREA ====================
+const MainContent: React.FC<{ address: string }> = ({ address }) => {
+  const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
+  const [channelName, setChannelName] = useState('');
+  const [nameStatus, setNameStatus] = useState<{available: boolean; message: string} | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    checkAccountExists();
+  }, [address]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (channelName.trim()) {
+        checkNameAvailability(channelName);
+      } else {
+        setNameStatus(null);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [channelName]);
+
+  const checkAccountExists = async () => {
+    setChecking(true);
+    try {
+      const exists = await aptos.view({
+        payload: {
+          function: `${MODULE_ADDRESS}::account::account_exists`,
+          typeArguments: [],
+          functionArguments: [address],
+        },
+      });
+
+      if (exists[0]) {
+        const info = await aptos.view({
+          payload: {
+            function: `${MODULE_ADDRESS}::account::get_account_info`,
+            typeArguments: [],
+            functionArguments: [address],
+          },
+        });
+        
+        setAccountInfo({
+          exists: true,
+          fullName: String(info[0] || ''),
+          subscriptionEnabled: Boolean(info[1]),
+          subscriberCount: Number(info[2]) || 0,
+          subscribedToCount: Number(info[3]) || 0,
+        });
+      } else {
+        setAccountInfo({ exists: false });
+      }
+    } catch (err) {
+      console.error('Error checking account:', err);
+      setAccountInfo({ exists: false });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const checkNameAvailability = async (name: string) => {
+    try {
+      const result = await aptos.view({
+        payload: {
+          function: `${MODULE_ADDRESS}::account::query_name`,
+          typeArguments: [],
+          functionArguments: [name],
+        },
+      });
+      
+      const status = Number(result[0]);
+      const messages = ['Name already taken', 'Name is blacklisted', 'Name is blocklisted', 'Available'];
+      
+      setNameStatus({
+        available: status === 3,
+        message: messages[status]
+      });
+    } catch (err) {
+      setNameStatus({ available: false, message: 'Error checking name' });
+    }
+  };
+
+  const handleCreateAccount = async () => {
+    if (!channelName.trim() || !nameStatus?.available) return;
+
+    setLoading(true);
+    try {
+      if (!window.aptos) {
+        throw new Error('Petra wallet not found. Please install Petra wallet extension.');
+      }
+
+      const transaction = {
+        data: {
+          function: `${MODULE_ADDRESS}::account::create_account`,
+          typeArguments: [],
+          functionArguments: [channelName],
+        },
+      };
+
+      const response = await window.aptos.signAndSubmitTransaction(transaction);
+      await aptos.waitForTransaction({ transactionHash: response.hash });
+      
+      await checkAccountExists();
+      setChannelName('');
+      setNameStatus(null);
+    } catch (err) {
+      console.error('Account creation failed:', err);
+      alert('Failed to create account: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (checking) {
+    return (
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '400px'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
+          <div style={{ color: '#718096' }}>Loading account information...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!accountInfo?.exists) {
+    return (
+      <div style={{
+        flex: 1,
+        background: 'white',
+        borderRadius: '16px',
+        padding: '2rem',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+      }}>
+        <div style={{ maxWidth: '500px', margin: '0 auto' }}>
+          <h2 style={{
+            fontSize: '2rem',
+            color: '#1a202c',
+            marginBottom: '0.5rem'
+          }}>
+            Create Your Channel
+          </h2>
+          <p style={{
+            color: '#718096',
+            marginBottom: '2rem'
+          }}>
+            Mint your Channelz NFT and create your account on the blockchain
+          </p>
+
+          <div style={{ marginBottom: '1.5rem' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '0.9rem',
+              fontWeight: '600',
+              color: '#2d3748',
+              marginBottom: '0.5rem'
+            }}>
+              Channel Name
+            </label>
+            <input
+              type="text"
+              value={channelName}
+              onChange={(e) => setChannelName(e.target.value)}
+              placeholder="Enter your channel name"
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                fontSize: '1rem',
+                border: '2px solid #e2e8f0',
+                borderRadius: '8px',
+                boxSizing: 'border-box',
+                outline: 'none',
+                transition: 'border 0.2s'
+              }}
+              onFocus={(e) => e.target.style.borderColor = '#667eea'}
+              onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+            />
+            
+            {nameStatus && (
+              <div style={{
+                marginTop: '0.75rem',
+                padding: '0.75rem',
+                borderRadius: '8px',
+                fontSize: '0.9rem',
+                background: nameStatus.available ? '#f0fdf4' : '#fef2f2',
+                color: nameStatus.available ? '#16a34a' : '#dc2626',
+                border: `1px solid ${nameStatus.available ? '#bbf7d0' : '#fecaca'}`
+              }}>
+                {nameStatus.available ? '✅' : '❌'} {nameStatus.message}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={handleCreateAccount}
+            disabled={loading || !channelName.trim() || !nameStatus?.available}
+            style={{
+              width: '100%',
+              padding: '1rem',
+              fontSize: '1.1rem',
+              fontWeight: 'bold',
+              background: (loading || !channelName.trim() || !nameStatus?.available)
+                ? '#cbd5e0'
+                : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '12px',
+              cursor: (loading || !channelName.trim() || !nameStatus?.available) ? 'not-allowed' : 'pointer',
+              transition: 'transform 0.2s'
+            }}
+            onMouseOver={(e) => {
+              if (!loading && channelName.trim() && nameStatus?.available) {
+                e.currentTarget.style.transform = 'scale(1.02)';
+              }
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+            }}
+          >
+            {loading ? '⏳ Creating Account...' : '🚀 Create Account (1 APT)'}
+          </button>
+
+          <div style={{
+            marginTop: '1.5rem',
+            padding: '1rem',
+            background: '#fffbeb',
+            border: '1px solid #fde047',
+            borderRadius: '8px',
+            fontSize: '0.85rem',
+            color: '#92400e'
+          }}>
+            <strong>💡 Note:</strong> Creating an account will mint a Channelz NFT and costs 1 APT.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      flex: 1,
+      background: 'white',
+      borderRadius: '16px',
+      padding: '2rem',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+    }}>
+      <h2 style={{
+        fontSize: '2rem',
+        color: '#1a202c',
+        marginBottom: '2rem'
+      }}>
+        Channel Dashboard
+      </h2>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: '1.5rem',
+        marginBottom: '2rem'
+      }}>
+        <div style={{
+          padding: '1.5rem',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          borderRadius: '12px',
+          color: 'white'
+        }}>
+          <div style={{ fontSize: '0.85rem', opacity: 0.9, marginBottom: '0.5rem' }}>
+            CHANNEL NAME
+          </div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>
+            {accountInfo.fullName}
+          </div>
+        </div>
+
+        <div style={{
+          padding: '1.5rem',
+          background: '#f0fdf4',
+          border: '2px solid #bbf7d0',
+          borderRadius: '12px'
+        }}>
+          <div style={{ fontSize: '0.85rem', color: '#166534', marginBottom: '0.5rem' }}>
+            SUBSCRIBERS
+          </div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#16a34a' }}>
+            {accountInfo.subscriberCount}
+          </div>
+        </div>
+
+        <div style={{
+          padding: '1.5rem',
+          background: '#eff6ff',
+          border: '2px solid #bfdbfe',
+          borderRadius: '12px'
+        }}>
+          <div style={{ fontSize: '0.85rem', color: '#1e40af', marginBottom: '0.5rem' }}>
+            FOLLOWING
+          </div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>
+            {accountInfo.subscribedToCount}
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        padding: '1.5rem',
+        background: accountInfo.subscriptionEnabled ? '#f0fdf4' : '#fef2f2',
+        border: `2px solid ${accountInfo.subscriptionEnabled ? '#bbf7d0' : '#fecaca'}`,
+        borderRadius: '12px'
+      }}>
+        <div style={{
+          fontSize: '1rem',
+          fontWeight: '600',
+          color: accountInfo.subscriptionEnabled ? '#166534' : '#991b1b',
+          marginBottom: '0.5rem'
+        }}>
+          Subscription Status
+        </div>
+        <div style={{
+          color: accountInfo.subscriptionEnabled ? '#16a34a' : '#dc2626'
+        }}>
+          {accountInfo.subscriptionEnabled ? '✅ Enabled' : '❌ Disabled'}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ==================== MAIN APP ====================
+function App() {
+  const [user, setUser] = useState<GoogleUser | null>(null);
+  const [keylessAccount, setKeylessAccount] = useState<KeylessAccountData | null>(null);
+  const [balance, setBalance] = useState('0.00');
+
+  useEffect(() => {
+    const savedAccount = localStorage.getItem('keyless_account');
+    if (savedAccount) {
+      try {
+        const accountData: KeylessAccountData = JSON.parse(savedAccount);
+        setKeylessAccount(accountData);
+        setUser(accountData.userData);
+      } catch (err) {
+        localStorage.removeItem('keyless_account');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (keylessAccount?.address) {
+      fetchBalance(keylessAccount.address);
+    }
+  }, [keylessAccount]);
+
+  const fetchBalance = async (address: string) => {
+    try {
+      const resources = await aptos.getAccountResources({ accountAddress: address });
+      const coinResource = resources.find((r: any) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>');
+      
+      if (coinResource) {
+        const balanceValue = (coinResource.data as any).coin.value;
+        const aptBalance = (Number(balanceValue) / 100000000).toFixed(2);
+        setBalance(aptBalance);
+      }
+    } catch (err) {
+      console.error('Error fetching balance:', err);
+    }
+  };
+
+  const handleSignIn = (userData: GoogleUser, accountData: KeylessAccountData) => {
+    setUser(userData);
+    setKeylessAccount(accountData);
+  };
+
+  const handleSignOut = () => {
+    setUser(null);
+    setKeylessAccount(null);
+    localStorage.removeItem('keyless_account');
+  };
+
+  if (!user || !keylessAccount) {
+    return <SignInScreen onSignIn={handleSignIn} />;
+  }
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+      padding: '2rem',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+    }}>
+      <div style={{
+        maxWidth: '1400px',
+        margin: '0 auto',
+        display: 'flex',
+        gap: '2rem'
+      }}>
+        <ProfileSidebar 
+          user={user}
+          address={keylessAccount.address}
+          balance={balance}
+          onSignOut={handleSignOut}
+        />
+        <MainContent address={keylessAccount.address} />
       </div>
     </div>
   );

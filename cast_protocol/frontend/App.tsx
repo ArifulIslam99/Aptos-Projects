@@ -265,16 +265,16 @@ const ProfileSidebar: React.FC<{
       position: 'sticky',
       top: '2rem'
     }}>
-      <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+      <div style={{ textAlign: 'center', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <img 
           src={user.picture} 
           alt={user.name}
           style={{
-            width: '100px',
-            height: '100px',
-            borderRadius: '50%',
-            border: '4px solid #667eea',
-            marginBottom: '1rem'
+        width: '100px',
+        height: '100px',
+        borderRadius: '50%',
+        border: '4px solid #667eea',
+        marginBottom: '1rem'
           }}
         />
         <h3 style={{
@@ -313,7 +313,33 @@ const ProfileSidebar: React.FC<{
           color: '#2d3748',
           wordBreak: 'break-all'
         }}>
-          {address.slice(0, 6)}...{address.slice(-4)}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
+              <button
+                onClick={(e) => {
+                  navigator.clipboard.writeText(address);
+                  e.currentTarget.style.background = '#48bb78'; // Green color to indicate success
+                  setTimeout(() => {
+                    e.currentTarget.style.background = '#667eea'; // Revert back to original color
+                  }, 2000); // Revert after 2 seconds
+                }}
+                style={{
+                  marginLeft: '0.5rem',
+                  padding: '0.25rem 0.5rem',
+                  fontSize: '0.75rem',
+                  background: '#667eea',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s'
+                }}
+                onMouseOver={(e) => (e.currentTarget.style.background = '#5a67d8')}
+                onMouseOut={(e) => (e.currentTarget.style.background = '#667eea')}
+              >
+                Copy
+              </button>
+            </div>
         </div>
       </div>
 
@@ -445,7 +471,7 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
     }
   };
 
-  const handleCreateAccount = async () => {
+  const handleCreateAccount = async () => { 
     if (!channelName.trim() || !nameStatus?.available) return;
 
     setLoading(true);
@@ -722,16 +748,48 @@ function App() {
 
   const fetchBalance = async (address: string) => {
     try {
+      if (!address) {
+        console.error('Invalid address provided:', address);
+        setBalance('0.00');
+        return;
+      }
+
+      console.log('Fetching balance for address:', address);
+      
+      // First check if account exists
+      try {
+        const accountInfo = await aptos.getAccountInfo({ accountAddress: address });
+        console.log('Account exists:', accountInfo);
+      } catch (accountErr) {
+        console.warn('Account not yet created on-chain:', accountErr);
+        setBalance('0.00');
+        return;
+      }
+
+      // If account exists, fetch resources
       const resources = await aptos.getAccountResources({ accountAddress: address });
+      console.log('Account Resources:', resources);
+      
+      if (!resources || resources.length === 0) {
+        console.warn('No resources found for the account.');
+        setBalance('0.00');
+        return;
+      }
+
       const coinResource = resources.find((r: any) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>');
       
       if (coinResource) {
         const balanceValue = (coinResource.data as any).coin.value;
         const aptBalance = (Number(balanceValue) / 100000000).toFixed(2);
+        console.log('Balance found:', aptBalance, 'APT');
         setBalance(aptBalance);
+      } else {
+        console.warn('CoinStore not found. Account exists but has no APT balance.');
+        setBalance('0.00');
       }
     } catch (err) {
       console.error('Error fetching balance:', err);
+      setBalance('0.00');
     }
   };
 

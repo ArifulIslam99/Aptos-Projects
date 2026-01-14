@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Aptos, 
-  AptosConfig, 
+import {
+  Aptos,
+  AptosConfig,
   Network,
   EphemeralKeyPair,
+  KeylessAccount,
 } from '@aptos-labs/ts-sdk';
 import { jwtDecode } from 'jwt-decode';
 
@@ -82,7 +83,7 @@ const GOOGLE_CLIENT_ID = '305427741136-j3j4r125hp5sqp5ojjdvcf5oomerckfn.apps.goo
 const MODULE_ADDRESS = '0xdfdda8374ca5e0dbe9fc21237c85295f120c7012c6344d96acf19d72a7236314';
 
 // ==================== SIGN IN COMPONENT ====================
-const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData) => void }> = ({ onSignIn }) => {
+const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData, keylessAccount: KeylessAccount) => void }> = ({ onSignIn }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const ephemeralKeyPairRef = useRef<EphemeralKeyPair | null>(null);
@@ -131,7 +132,7 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
     try {
       const jwt = response.credential;
       const payload = jwtDecode<JWTPayload>(jwt);
-      
+
       const userData: GoogleUser = {
         email: payload.email,
         name: payload.name,
@@ -155,8 +156,8 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
       };
 
       localStorage.setItem('keyless_account', JSON.stringify(accountData));
-      onSignIn(userData, accountData);
-      
+      onSignIn(userData, accountData, keylessAccountObj);
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError('Authentication failed: ' + errorMessage);
@@ -187,7 +188,7 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
           fontSize: '4rem',
           marginBottom: '1rem'
         }}>📺</div>
-        
+
         <h1 style={{
           fontSize: '2.5rem',
           fontWeight: 'bold',
@@ -198,7 +199,7 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
         }}>
           Welcome to Channelz
         </h1>
-        
+
         <p style={{
           color: '#666',
           fontSize: '1.1rem',
@@ -233,7 +234,7 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
               justifyContent: 'center',
               marginBottom: '1.5rem'
             }}></div>
-            
+
             <p style={{
               fontSize: '0.9rem',
               color: '#999'
@@ -266,15 +267,15 @@ const ProfileSidebar: React.FC<{
       top: '2rem'
     }}>
       <div style={{ textAlign: 'center', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <img 
-          src={user.picture} 
+        <img
+          src={user.picture}
           alt={user.name}
           style={{
-        width: '100px',
-        height: '100px',
-        borderRadius: '50%',
-        border: '4px solid #667eea',
-        marginBottom: '1rem'
+            width: '100px',
+            height: '100px',
+            borderRadius: '50%',
+            border: '4px solid #667eea',
+            marginBottom: '1rem'
           }}
         />
         <h3 style={{
@@ -313,33 +314,33 @@ const ProfileSidebar: React.FC<{
           color: '#2d3748',
           wordBreak: 'break-all'
         }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
-              <button
-                onClick={(e) => {
-                  navigator.clipboard.writeText(address);
-                  e.currentTarget.style.background = '#48bb78'; // Green color to indicate success
-                  setTimeout(() => {
-                    e.currentTarget.style.background = '#667eea'; // Revert back to original color
-                  }, 2000); // Revert after 2 seconds
-                }}
-                style={{
-                  marginLeft: '0.5rem',
-                  padding: '0.25rem 0.5rem',
-                  fontSize: '0.75rem',
-                  background: '#667eea',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  transition: 'background 0.2s'
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.background = '#5a67d8')}
-                onMouseOut={(e) => (e.currentTarget.style.background = '#667eea')}
-              >
-                Copy
-              </button>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
+            <button
+              onClick={(e) => {
+                navigator.clipboard.writeText(address);
+                e.currentTarget.style.background = '#48bb78'; // Green color to indicate success
+                setTimeout(() => {
+                  e.currentTarget.style.background = '#667eea'; // Revert back to original color
+                }, 2000); // Revert after 2 seconds
+              }}
+              style={{
+                marginLeft: '0.5rem',
+                padding: '0.25rem 0.5rem',
+                fontSize: '0.75rem',
+                background: '#667eea',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                transition: 'background 0.2s'
+              }}
+              onMouseOver={(e) => (e.currentTarget.style.background = '#5a67d8')}
+              onMouseOut={(e) => (e.currentTarget.style.background = '#667eea')}
+            >
+              Copy
+            </button>
+          </div>
         </div>
       </div>
 
@@ -389,10 +390,10 @@ const ProfileSidebar: React.FC<{
 };
 
 // ==================== MAIN CONTENT AREA ====================
-const MainContent: React.FC<{ address: string }> = ({ address }) => {
+const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | null }> = ({ address, keylessAccount }) => {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
   const [channelName, setChannelName] = useState('');
-  const [nameStatus, setNameStatus] = useState<{available: boolean; message: string} | null>(null);
+  const [nameStatus, setNameStatus] = useState<{ available: boolean; message: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
 
@@ -430,7 +431,7 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
             functionArguments: [address],
           },
         });
-        
+
         setAccountInfo({
           exists: true,
           fullName: String(info[0] || ''),
@@ -458,10 +459,10 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
           functionArguments: [name],
         },
       });
-      
+
       const status = Number(result[0]);
       const messages = ['Name already taken', 'Name is blacklisted', 'Name is blocklisted', 'Available'];
-      
+
       setNameStatus({
         available: status === 3,
         message: messages[status]
@@ -471,26 +472,34 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
     }
   };
 
-  const handleCreateAccount = async () => { 
+  const handleCreateAccount = async () => {
     if (!channelName.trim() || !nameStatus?.available) return;
 
     setLoading(true);
     try {
-      if (!window.aptos) {
-        throw new Error('Petra wallet not found. Please install Petra wallet extension.');
+      if (!keylessAccount) {
+        throw new Error('Keyless account not available. Please sign in again.');
       }
 
-      const transaction = {
+      // Build the transaction
+      const transaction = await aptos.transaction.build.simple({
+        sender: keylessAccount.accountAddress,
         data: {
           function: `${MODULE_ADDRESS}::account::create_account`,
           typeArguments: [],
           functionArguments: [channelName],
         },
-      };
+      });
 
-      const response = await window.aptos.signAndSubmitTransaction(transaction);
-      await aptos.waitForTransaction({ transactionHash: response.hash });
-      
+      // Sign and submit the transaction with the keyless account
+      const committedTxn = await aptos.signAndSubmitTransaction({
+        signer: keylessAccount,
+        transaction,
+      });
+
+      // Wait for transaction confirmation
+      await aptos.waitForTransaction({ transactionHash: committedTxn.hash });
+
       await checkAccountExists();
       setChannelName('');
       setNameStatus(null);
@@ -571,7 +580,7 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
               onFocus={(e) => e.target.style.borderColor = '#667eea'}
               onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
             />
-            
+
             {nameStatus && (
               <div style={{
                 marginTop: '0.75rem',
@@ -724,27 +733,33 @@ const MainContent: React.FC<{ address: string }> = ({ address }) => {
 // ==================== MAIN APP ====================
 function App() {
   const [user, setUser] = useState<GoogleUser | null>(null);
-  const [keylessAccount, setKeylessAccount] = useState<KeylessAccountData | null>(null);
+  const [keylessAccountData, setKeylessAccountData] = useState<KeylessAccountData | null>(null);
+  const [keylessAccount, setKeylessAccount] = useState<KeylessAccount | null>(null);
   const [balance, setBalance] = useState('0.00');
 
   useEffect(() => {
+    // Note: Keyless accounts cannot be fully restored from localStorage
+    // because the ephemeral key pair contains private keys that can't be serialized.
+    // We restore display data, but users need to re-authenticate to sign transactions.
     const savedAccount = localStorage.getItem('keyless_account');
     if (savedAccount) {
       try {
         const accountData: KeylessAccountData = JSON.parse(savedAccount);
-        setKeylessAccount(accountData);
+        setKeylessAccountData(accountData);
         setUser(accountData.userData);
+        // keylessAccount remains null - user must re-authenticate for transactions
       } catch (err) {
+        console.error('Failed to restore account data:', err);
         localStorage.removeItem('keyless_account');
       }
     }
   }, []);
 
   useEffect(() => {
-    if (keylessAccount?.address) {
-      fetchBalance(keylessAccount.address);
+    if (keylessAccountData?.address) {
+      fetchBalance(keylessAccountData.address);
     }
-  }, [keylessAccount]);
+  }, [keylessAccountData]);
 
   const fetchBalance = async (address: string) => {
     try {
@@ -755,56 +770,40 @@ function App() {
       }
 
       console.log('Fetching balance for address:', address);
-      
-      // First check if account exists
-      try {
-        const accountInfo = await aptos.getAccountInfo({ accountAddress: address });
-        console.log('Account exists:', accountInfo);
-      } catch (accountErr) {
-        console.warn('Account not yet created on-chain:', accountErr);
-        setBalance('0.00');
-        return;
-      }
 
-      // If account exists, fetch resources
-      const resources = await aptos.getAccountResources({ accountAddress: address });
-      console.log('Account Resources:', resources);
-      
-      if (!resources || resources.length === 0) {
-        console.warn('No resources found for the account.');
-        setBalance('0.00');
-        return;
-      }
+      // Use the dedicated method to get APT balance - more reliable
+      const balanceInOctas = await aptos.getAccountAPTAmount({ accountAddress: address });
+      console.log('Balance in Octas:', balanceInOctas);
 
-      const coinResource = resources.find((r: any) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>');
-      
-      if (coinResource) {
-        const balanceValue = (coinResource.data as any).coin.value;
-        const aptBalance = (Number(balanceValue) / 100000000).toFixed(2);
-        console.log('Balance found:', aptBalance, 'APT');
-        setBalance(aptBalance);
+      // Convert from Octas (10^-8 APT) to APT
+      const aptBalance = (Number(balanceInOctas) / 100000000).toFixed(2);
+      console.log('Balance found:', aptBalance, 'APT');
+      setBalance(aptBalance);
+    } catch (err: any) {
+      // Account might not exist on-chain yet
+      if (err?.message?.includes('not found') || err?.status === 404) {
+        console.warn('Account not yet created on-chain:', err);
       } else {
-        console.warn('CoinStore not found. Account exists but has no APT balance.');
-        setBalance('0.00');
+        console.error('Error fetching balance:', err);
       }
-    } catch (err) {
-      console.error('Error fetching balance:', err);
       setBalance('0.00');
     }
   };
 
-  const handleSignIn = (userData: GoogleUser, accountData: KeylessAccountData) => {
+  const handleSignIn = (userData: GoogleUser, accountData: KeylessAccountData, keylessAccountObj: KeylessAccount) => {
     setUser(userData);
-    setKeylessAccount(accountData);
+    setKeylessAccountData(accountData);
+    setKeylessAccount(keylessAccountObj);
   };
 
   const handleSignOut = () => {
     setUser(null);
+    setKeylessAccountData(null);
     setKeylessAccount(null);
     localStorage.removeItem('keyless_account');
   };
 
-  if (!user || !keylessAccount) {
+  if (!user || !keylessAccountData) {
     return <SignInScreen onSignIn={handleSignIn} />;
   }
 
@@ -821,13 +820,13 @@ function App() {
         display: 'flex',
         gap: '2rem'
       }}>
-        <ProfileSidebar 
+        <ProfileSidebar
           user={user}
-          address={keylessAccount.address}
+          address={keylessAccountData.address}
           balance={balance}
           onSignOut={handleSignOut}
         />
-        <MainContent address={keylessAccount.address} />
+        <MainContent address={keylessAccountData.address} keylessAccount={keylessAccount} />
       </div>
     </div>
   );

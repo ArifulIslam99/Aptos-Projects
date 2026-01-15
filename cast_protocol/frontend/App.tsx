@@ -9,7 +9,8 @@ import {
   Serializer,
   MultiKey,
   MultiKeyAccount,
-  Ed25519PublicKey,
+  Ed25519PrivateKey,
+  AnyPublicKey,
 } from '@aptos-labs/ts-sdk';
 import { jwtDecode } from 'jwt-decode';
 //ed25519-priv-0xfc0e3afedec87d15b53bfd56e69eec07301ed96ab2eca6d9e50bf9a786c1ebfb
@@ -65,6 +66,7 @@ interface JWTPayload {
 interface KeylessAccountData {
   address: string;
   userData: GoogleUser;
+  backupPrivateKey?: string;
 }
 
 interface AccountInfo {
@@ -83,10 +85,10 @@ declare global {
 }
 
 // ==================== CONFIG ====================
-const APTOS_CONFIG = new AptosConfig({ network: Network.DEVNET });
+const APTOS_CONFIG = new AptosConfig({ network: Network.TESTNET });
 const aptos = new Aptos(APTOS_CONFIG);
 const GOOGLE_CLIENT_ID = '305427741136-j3j4r125hp5sqp5ojjdvcf5oomerckfn.apps.googleusercontent.com';
-const MODULE_ADDRESS = '0xf22de674f0042008e968de121b4ed0c0ca0eee62a46aef505fbf5b1305c9bd57';
+const MODULE_ADDRESS = '0x0e8ff60af3c4d82f19afae4e316e82a27bbfe9ab7f22e805e0a0b58034e8df15';
 
 // ==================== SIGN IN COMPONENT ====================
 const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData, keylessAccount: KeylessAccount) => void }> = ({ onSignIn }) => {
@@ -392,13 +394,46 @@ const BackupKeyModal: React.FC<{
 };
 
 // ==================== PROFILE SIDEBAR ====================
+// ==================== HELPERS ====================
+async function resolveSigner(
+  keylessAccount: KeylessAccount,
+  backupPrivateKeyStr: string | null
+): Promise<KeylessAccount | MultiKeyAccount> {
+  if (!backupPrivateKeyStr) return keylessAccount;
+
+  try {
+    const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '');
+    const backupAccount = Account.fromPrivateKey({
+      privateKey: new Ed25519PrivateKey(rawKey),
+    });
+
+    const multiKey = new MultiKey({
+      publicKeys: [
+        new AnyPublicKey(keylessAccount.publicKey),
+        new AnyPublicKey(backupAccount.publicKey),
+      ],
+      signaturesRequired: 1,
+    });
+
+    return new MultiKeyAccount({
+      address: keylessAccount.accountAddress,
+      multiKey,
+      signers: [keylessAccount],
+    });
+  } catch (err) {
+    console.warn('Error resolving MultiKey signer:', err);
+    return keylessAccount;
+  }
+}
+
 const ProfileSidebar: React.FC<{
   user: GoogleUser;
   address: string;
   balance: string;
   onSignOut: () => void;
   keylessAccount: KeylessAccount | null;
-}> = ({ user, address, balance, onSignOut, keylessAccount }) => {
+  onImportBackupKey: (key: string) => void;
+}> = ({ user, address, balance, onSignOut, keylessAccount, onImportBackupKey }) => {
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [backupKeyInstalled, setBackupKeyInstalled] = useState(false);
 
@@ -424,13 +459,7 @@ const ProfileSidebar: React.FC<{
     const sequenceNumber = BigInt(accountDataInfo.sequence_number);
 
     // Step 3: Construct the RotationProofChallenge message
-    // Move verifies signatures on structs using a SignedMessage wrapper:
-    // struct SignedMessage<T> { type_info: TypeInfo, inner: T }
-    // struct TypeInfo { account_address: address, module_name: vector<u8>, struct_name: vector<u8> }
-
-    // 1. Serialize TypeInfo for RotationProofChallenge (in 0x1::account)
     const typeInfoSerializer = new Serializer();
-    // account_address: 0x1 (32 bytes)
     const addr0x1 = new Uint8Array(32);
     addr0x1[31] = 1;
     typeInfoSerializer.serializeFixedBytes(addr0x1);
@@ -438,7 +467,6 @@ const ProfileSidebar: React.FC<{
     typeInfoSerializer.serializeBytes(new TextEncoder().encode("RotationProofChallenge")); // struct_name
     const typeInfoBytes = typeInfoSerializer.toUint8Array();
 
-    // 2. Serialize RotationProofChallenge data
     const challengeSerializer = new Serializer();
     challengeSerializer.serializeU64(sequenceNumber);
     challengeSerializer.serializeFixedBytes(keylessAccount.accountAddress.toUint8Array()); // originator
@@ -446,7 +474,6 @@ const ProfileSidebar: React.FC<{
     challengeSerializer.serializeBytes(backupPublicKey.toUint8Array()); // new_public_key
     const challengeBytes = challengeSerializer.toUint8Array();
 
-    // 3. Combine into the final message to sign (SignedMessage layout)
     const messageToSign = new Uint8Array(typeInfoBytes.length + challengeBytes.length);
     messageToSign.set(typeInfoBytes);
     messageToSign.set(challengeBytes, typeInfoBytes.length);
@@ -454,23 +481,10 @@ const ProfileSidebar: React.FC<{
     // Step 4: Sign the message with the backup key to create the proof
     const proofSignature = backupAccount.sign(messageToSign);
     const proofBytes = proofSignature.toUint8Array();
-    const rawBackupPubKeyBytes = backupPublicKey.toUint8Array();
 
-    // Step 5: Build the transaction
-    const serializerForPK = new Serializer();
-    // Prepend SingleKey variant ID for Keyless: 0x03
-    serializerForPK.serializeU8(3);
-
-    // Get the inner KeylessPublicKey to use its serialize method
-    const pk = keylessAccount.publicKey as any;
-    if (typeof pk.serialize === 'function') {
-      pk.serialize(serializerForPK);
-    } else {
-      // Fallback: manually serialize if the above fails
-      serializerForPK.serializeStr(pk.issuer || "https://accounts.google.com");
-      serializerForPK.serializeBytes(pk.idCommitment);
-    }
-    const keylessPublicKeyBytes = serializerForPK.toUint8Array();
+    // Step 5: Build implementation data
+    const keylessPublicKeyBytes = new AnyPublicKey(keylessAccount.publicKey).toUint8Array();
+    const backupPublicKeyBytes = new AnyPublicKey(backupPublicKey).toUint8Array();
 
     const transaction = await aptos.transaction.build.simple({
       sender: keylessAccount.accountAddress,
@@ -478,29 +492,34 @@ const ProfileSidebar: React.FC<{
         function: '0x1::account::upsert_ed25519_backup_key_on_keyless_account',
         typeArguments: [],
         functionArguments: [
-          keylessPublicKeyBytes, // Passed as Uint8Array
-          rawBackupPubKeyBytes,  // Passed as Uint8Array
-          proofBytes,            // Passed as Uint8Array
+          keylessPublicKeyBytes,
+          backupPublicKeyBytes,
+          proofBytes,
         ],
       },
     });
 
-    // Step 6: Sign with keyless account
+    // Step 6: Sign and Submit using resolveSigner (handles already-rotated accounts)
+    const existingBackupKey = localStorage.getItem(`backup_private_key_content_${address}`);
+    const signer = await resolveSigner(keylessAccount, existingBackupKey);
+
     const committedTxn = await aptos.signAndSubmitTransaction({
-      signer: keylessAccount,
+      signer,
       transaction,
     });
 
     // Step 7: Wait for confirmation
     await aptos.waitForTransaction({ transactionHash: committedTxn.hash });
 
-    // Mark as installed and save public key for future signing
     localStorage.setItem(`backup_key_installed_${address}`, 'true');
     localStorage.setItem(`backup_public_key_${address}`, backupPublicKey.toString());
     setBackupKeyInstalled(true);
 
-    // Return the backup private key hex
-    return backupAccount.privateKey.toString();
+    const fullKey = backupAccount.privateKey.toString();
+    // Automatically "connect" and update parent state
+    onImportBackupKey(fullKey);
+
+    return fullKey;
   };
 
   const handleResetApp = () => {
@@ -536,15 +555,17 @@ const ProfileSidebar: React.FC<{
           </div>
         </div>
 
-        <div style={{ padding: '1rem', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', borderRadius: '12px', marginBottom: '1rem', color: 'white' }}>
+        <div style={{ padding: '1rem', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', borderRadius: '12px', marginBottom: '1.5rem', color: 'white' }}>
           <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem', opacity: 0.9 }}>BALANCE</div>
           <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{balance} APT</div>
         </div>
 
         {backupKeyInstalled ? (
-          <div style={{ padding: '0.75rem', marginBottom: '0.75rem', background: '#f0fdf4', border: '2px solid #86efac', borderRadius: '8px', textAlign: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: '#166534', fontWeight: '600' }}>✅ Backup Key Installed</span>
-            <p style={{ fontSize: '0.75rem', color: '#15803d', margin: '0.25rem 0 0 0' }}>Account is 1-of-2 multisig</p>
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ padding: '0.75rem', background: '#f0fdf4', border: '2px solid #86efac', borderRadius: '8px', textAlign: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: '#166534', fontWeight: '600' }}>✅ Backup Key Active</span>
+              <p style={{ fontSize: '0.75rem', color: '#15803d', margin: '0.25rem 0 0 0' }}>MultiKey Protection Enabled</p>
+            </div>
           </div>
         ) : (
           <button
@@ -553,7 +574,7 @@ const ProfileSidebar: React.FC<{
             style={{
               width: '100%',
               padding: '0.75rem',
-              marginBottom: '0.75rem',
+              marginBottom: '1rem',
               background: keylessAccount ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#cbd5e0',
               color: 'white',
               border: 'none',
@@ -617,8 +638,13 @@ const CongratulationsModal: React.FC<{ channelName: string; onClose: () => void 
   );
 };
 
+
 // ==================== MAIN CONTENT AREA ====================
-const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | null }> = ({ address, keylessAccount }) => {
+const MainContent: React.FC<{
+  address: string;
+  keylessAccount: KeylessAccount | null;
+  backupPrivateKey: string | null;
+}> = ({ address, keylessAccount, backupPrivateKey }) => {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
   const [channelName, setChannelName] = useState('');
   const [nameStatus, setNameStatus] = useState<{ available: boolean; message: string } | null>(null);
@@ -666,25 +692,7 @@ const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | 
     try {
       if (!keylessAccount) throw new Error('Keyless account not available. Please sign in again.');
 
-      // Support signing from rotated accounts (multisig)
-      let signer: any = keylessAccount;
-      const backupPubKeyHex = localStorage.getItem(`backup_public_key_${address}`);
-      if (backupPubKeyHex) {
-        try {
-          const backupPublicKey = new Ed25519PublicKey(backupPubKeyHex);
-          const multiKey = new MultiKey({
-            publicKeys: [keylessAccount.publicKey, backupPublicKey],
-            signaturesRequired: 1,
-          });
-          signer = new MultiKeyAccount({
-            multiKey,
-            signers: [keylessAccount],
-            address: keylessAccount.accountAddress,
-          });
-        } catch (e) {
-          console.warn('Reconstructing MultiKey signer failed, falling back to single key:', e);
-        }
-      }
+      const signer = await resolveSigner(keylessAccount, backupPrivateKey);
 
       const transaction = await aptos.transaction.build.simple({
         sender: keylessAccount.accountAddress,
@@ -708,8 +716,9 @@ const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | 
         message = 'Invalid authentication key. If you recently added a backup key, please ensure you are using the correct account or sign in again.';
       }
       alert('Failed to create account: ' + message);
+    } finally {
+      setLoading(false);
     }
-    finally { setLoading(false); }
   };
 
   const handleSubscribe = async () => {
@@ -720,28 +729,11 @@ const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | 
       if (!keylessAccount) throw new Error('Keyless account not available. Please sign in again.');
       if (!subscribeAddress.startsWith('0x') || subscribeAddress.length < 10) throw new Error('Invalid wallet address format');
 
-      // Support signing from rotated accounts (multisig)
-      let signer: any = keylessAccount;
-      const backupPubKeyHex = localStorage.getItem(`backup_public_key_${address}`);
-      if (backupPubKeyHex) {
-        try {
-          const backupPublicKey = new Ed25519PublicKey(backupPubKeyHex);
-          const multiKey = new MultiKey({
-            publicKeys: [keylessAccount.publicKey, backupPublicKey],
-            signaturesRequired: 1,
-          });
-          signer = new MultiKeyAccount({
-            multiKey,
-            signers: [keylessAccount],
-            address: keylessAccount.accountAddress,
-          });
-        } catch (e) {
-          console.warn('Reconstructing MultiKey signer failed, falling back to single key:', e);
-        }
-      }
-
       const targetExists = await aptos.view({ payload: { function: `${MODULE_ADDRESS}::account::account_exists`, typeArguments: [], functionArguments: [subscribeAddress] } });
       if (!targetExists[0]) throw new Error('Target account does not exist on Channelz');
+
+      const signer = await resolveSigner(keylessAccount, backupPrivateKey);
+
       const transaction = await aptos.transaction.build.simple({
         sender: keylessAccount.accountAddress,
         data: {
@@ -763,7 +755,9 @@ const MainContent: React.FC<{ address: string; keylessAccount: KeylessAccount | 
       else if (errorMessage.includes('E_SUBSCRIPTION_DISABLED') || errorMessage.includes('0x3')) errorMessage = 'This account has disabled subscriptions';
       else if (errorMessage.includes('INVALID_AUTH_KEY')) errorMessage = 'Authentication failed. Please sign in again or check your backup key status.';
       setSubscribeStatus({ success: false, message: errorMessage });
-    } finally { setSubscribing(false); }
+    } finally {
+      setSubscribing(false);
+    }
   };
 
   if (checking) {
@@ -885,15 +879,33 @@ function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)', padding: '2rem', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
-      <div style={{ maxWidth: '1400px', margin: '0 auto', display: 'flex', gap: '2rem' }}>
-        <ProfileSidebar
-          user={user}
-          address={keylessAccountData.address}
-          balance={balance}
-          onSignOut={handleSignOut}
-          keylessAccount={keylessAccount}
-        />
-        <MainContent address={keylessAccountData.address} keylessAccount={keylessAccount} />
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.5rem', background: 'white', padding: '0.75rem 1.5rem', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
+            <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Network: {APTOS_CONFIG.network}</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
+          <ProfileSidebar
+            user={user}
+            address={keylessAccountData.address}
+            balance={balance}
+            onSignOut={handleSignOut}
+            keylessAccount={keylessAccount}
+            onImportBackupKey={(key) => {
+              const updatedData = { ...keylessAccountData, backupPrivateKey: key };
+              setKeylessAccountData(updatedData);
+              localStorage.setItem('keyless_account', JSON.stringify(updatedData));
+            }}
+          />
+          <MainContent
+            address={keylessAccountData.address}
+            keylessAccount={keylessAccount}
+            backupPrivateKey={keylessAccountData.backupPrivateKey || null}
+          />
+        </div>
       </div>
     </div>
   );

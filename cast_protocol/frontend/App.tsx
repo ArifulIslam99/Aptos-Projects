@@ -7,7 +7,6 @@ import {
   KeylessAccount,
   Account,
   Serializer,
-  MultiKey,
   MultiKeyAccount,
   Ed25519PrivateKey,
   AnyPublicKey,
@@ -402,22 +401,22 @@ async function resolveSigner(
   if (!backupPrivateKeyStr) return keylessAccount;
 
   try {
-    const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '');
+    const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
+    if (!rawKey) return keylessAccount;
+
     const backupAccount = Account.fromPrivateKey({
       privateKey: new Ed25519PrivateKey(rawKey),
     });
 
-    const multiKey = new MultiKey({
+    // NOTE: We MUST match the order expected on-chain (Keyless first).
+    // Using static constructor for better reliability with indices.
+    return MultiKeyAccount.fromPublicKeysAndSigners({
+      address: keylessAccount.accountAddress,
       publicKeys: [
-        new AnyPublicKey(keylessAccount.publicKey),
-        new AnyPublicKey(backupAccount.publicKey),
+        keylessAccount.publicKey,
+        backupAccount.publicKey,
       ],
       signaturesRequired: 1,
-    });
-
-    return new MultiKeyAccount({
-      address: keylessAccount.accountAddress,
-      multiKey,
       signers: [keylessAccount],
     });
   } catch (err) {
@@ -436,6 +435,7 @@ const ProfileSidebar: React.FC<{
 }> = ({ user, address, balance, onSignOut, keylessAccount, onImportBackupKey }) => {
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [backupKeyInstalled, setBackupKeyInstalled] = useState(false);
+  const [addressCopied, setAddressCopied] = useState(false);
 
   // Check if backup key is already installed (stored in localStorage)
   useEffect(() => {
@@ -483,8 +483,13 @@ const ProfileSidebar: React.FC<{
     const proofBytes = proofSignature.toUint8Array();
 
     // Step 5: Build implementation data
-    const keylessPublicKeyBytes = new AnyPublicKey(keylessAccount.publicKey).toUint8Array();
-    const backupPublicKeyBytes = new AnyPublicKey(backupPublicKey).toUint8Array();
+    const serializerForPK = new Serializer();
+    serializerForPK.serializeU8(3); // Keyless variant inside AnyPublicKey
+    (keylessAccount.publicKey as any).serialize(serializerForPK);
+    const keylessPublicKeyBytes = serializerForPK.toUint8Array();
+
+    const backupPublicKeyAny = new AnyPublicKey(backupPublicKey);
+    const backupPublicKeyBytes = backupPublicKeyAny.toUint8Array();
 
     const transaction = await aptos.transaction.build.simple({
       sender: keylessAccount.accountAddress,
@@ -499,9 +504,14 @@ const ProfileSidebar: React.FC<{
       },
     });
 
-    // Step 6: Sign and Submit using resolveSigner (handles already-rotated accounts)
-    const existingBackupKey = localStorage.getItem(`backup_private_key_content_${address}`);
-    const signer = await resolveSigner(keylessAccount, existingBackupKey);
+    // Step 6: Sign and Submit using existing backup key if available (allows rotation repair)
+    const savedAccount = localStorage.getItem('keyless_account');
+    let existingBackupKey = null;
+    if (savedAccount) {
+      const parsed = JSON.parse(savedAccount);
+      existingBackupKey = parsed.backupPrivateKey;
+    }
+    const signer = await resolveSigner(keylessAccount, existingBackupKey || null);
 
     const committedTxn = await aptos.signAndSubmitTransaction({
       signer,
@@ -550,7 +560,26 @@ const ProfileSidebar: React.FC<{
           <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#2d3748', wordBreak: 'break-all' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
-              <button onClick={() => navigator.clipboard.writeText(address)} style={{ marginLeft: '0.5rem', padding: '0.25rem 0.5rem', fontSize: '0.75rem', background: '#667eea', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Copy</button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(address);
+                  setAddressCopied(true);
+                  setTimeout(() => setAddressCopied(false), 2000);
+                }}
+                style={{
+                  marginLeft: '0.5rem',
+                  padding: '0.25rem 0.5rem',
+                  fontSize: '0.75rem',
+                  background: addressCopied ? '#10b981' : '#667eea',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s'
+                }}
+              >
+                {addressCopied ? 'Copied!' : 'Copy'}
+              </button>
             </div>
           </div>
         </div>
@@ -568,31 +597,63 @@ const ProfileSidebar: React.FC<{
             </div>
           </div>
         ) : (
-          <button
-            onClick={() => setShowBackupModal(true)}
-            disabled={!keylessAccount}
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              marginBottom: '1rem',
-              background: keylessAccount ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#cbd5e0',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: keylessAccount ? 'pointer' : 'not-allowed',
-              fontSize: '0.85rem',
-              fontWeight: '600'
-            }}
-          >
-            🔑 Install Backup Key
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+            <button
+              onClick={() => setShowBackupModal(true)}
+              disabled={!keylessAccount}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                background: keylessAccount ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#cbd5e0',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: keylessAccount ? 'pointer' : 'not-allowed',
+                fontSize: '0.85rem',
+                fontWeight: '600'
+              }}
+            >
+              🔑 Install Backup Key
+            </button>
+            <button
+              onClick={() => {
+                const key = prompt('Please enter your existing backup private key (hex):');
+                if (key) {
+                  onImportBackupKey(key.trim());
+                  localStorage.setItem(`backup_key_installed_${address}`, 'true');
+                  setBackupKeyInstalled(true);
+                  alert('Backup key imported successfully! Your session is now synchronized.');
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                background: 'transparent',
+                color: '#d97706',
+                border: '1px solid #fcd34d',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                fontWeight: '600'
+              }}
+            >
+              📥 Already have a key? Import
+            </button>
+          </div>
         )}
 
         <button onClick={onSignOut} style={{ width: '100%', padding: '0.75rem', background: '#f56565', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.5rem' }}>Sign Out</button>
 
-        <button onClick={handleResetApp} style={{ width: '100%', padding: '0.5rem', background: 'transparent', color: '#718096', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500' }}>
+        <button onClick={handleResetApp} style={{ width: '100%', padding: '0.5rem', background: 'transparent', color: '#718096', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500', marginBottom: '1rem' }}>
           🔄 Reset Application State
         </button>
+
+        <div style={{ padding: '0.75rem', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
+            <span style={{ fontSize: '0.7rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Network: {APTOS_CONFIG.network}</span>
+          </div>
+        </div>
       </div>
     </>
   );
@@ -649,6 +710,7 @@ const MainContent: React.FC<{
   const [channelName, setChannelName] = useState('');
   const [nameStatus, setNameStatus] = useState<{ available: boolean; message: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [checking, setChecking] = useState(true);
   const [showCongrats, setShowCongrats] = useState(false);
   const [createdChannelName, setCreatedChannelName] = useState('');
@@ -718,6 +780,39 @@ const MainContent: React.FC<{
       alert('Failed to create account: ' + message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleSubscription = async () => {
+    if (!accountInfo) return;
+    setToggling(true);
+    try {
+      if (!keylessAccount) throw new Error('Keyless account not available. Please sign in again.');
+
+      const signer = await resolveSigner(keylessAccount, backupPrivateKey);
+      const newStatus = !accountInfo.subscriptionEnabled;
+
+      const transaction = await aptos.transaction.build.simple({
+        sender: keylessAccount.accountAddress,
+        data: {
+          function: `${MODULE_ADDRESS}::account::set_subscription_enabled`,
+          typeArguments: [],
+          functionArguments: [newStatus]
+        }
+      });
+      const committedTxn = await aptos.signAndSubmitTransaction({ signer, transaction });
+      await aptos.waitForTransaction({ transactionHash: committedTxn.hash });
+
+      // Refresh local state immediately
+      setAccountInfo({
+        ...accountInfo,
+        subscriptionEnabled: newStatus
+      });
+    } catch (err: any) {
+      console.error('Toggle subscription failed:', err);
+      alert('Failed to update subscription status: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -814,9 +909,32 @@ const MainContent: React.FC<{
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{accountInfo?.subscribedToCount}</div>
           </div>
         </div>
-        <div style={{ padding: '1.5rem', background: accountInfo?.subscriptionEnabled ? '#f0fdf4' : '#fef2f2', border: `2px solid ${accountInfo?.subscriptionEnabled ? '#bbf7d0' : '#fecaca'}`, borderRadius: '12px' }}>
-          <div style={{ fontSize: '1rem', fontWeight: '600', color: accountInfo?.subscriptionEnabled ? '#166534' : '#991b1b', marginBottom: '0.5rem' }}>Subscription Status</div>
-          <div style={{ color: accountInfo?.subscriptionEnabled ? '#16a34a' : '#dc2626' }}>{accountInfo?.subscriptionEnabled ? '✅ Enabled' : '❌ Disabled'}</div>
+        <div style={{ padding: '1.5rem', background: accountInfo?.subscriptionEnabled ? '#f0fdf4' : '#fef2f2', border: `2px solid ${accountInfo?.subscriptionEnabled ? '#bbf7d0' : '#fecaca'}`, borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: '1rem', fontWeight: '600', color: accountInfo?.subscriptionEnabled ? '#166534' : '#991b1b', marginBottom: '0.25rem' }}>Subscription Status</div>
+            <div style={{ color: accountInfo?.subscriptionEnabled ? '#16a34a' : '#dc2626', fontSize: '1.1rem', fontWeight: 'bold' }}>
+              {accountInfo?.subscriptionEnabled ? 'Enabled' : 'Disabled'}
+            </div>
+          </div>
+          <button
+            onClick={handleToggleSubscription}
+            disabled={toggling}
+            style={{
+              padding: '0.6rem 1.2rem',
+              borderRadius: '8px',
+              border: 'none',
+              background: accountInfo?.subscriptionEnabled ? '#ef4444' : '#10b981',
+              color: 'white',
+              cursor: toggling ? 'not-allowed' : 'pointer',
+              fontWeight: '600',
+              fontSize: '0.85rem',
+              transition: 'all 0.2s ease',
+              opacity: toggling ? 0.7 : 1,
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            }}
+          >
+            {toggling ? '⏳ Updating...' : accountInfo?.subscriptionEnabled ? 'Disable Subscriptions' : 'Enable Subscriptions'}
+          </button>
         </div>
         <div style={{ marginTop: '2rem', padding: '1.5rem', background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)', border: '2px solid #7dd3fc', borderRadius: '12px' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', color: '#0369a1', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>🔔 Subscribe to a Channel</h3>
@@ -856,7 +974,7 @@ function App() {
     try {
       if (!address) { setBalance('0.00'); return; }
       const balanceInOctas = await aptos.getAccountAPTAmount({ accountAddress: address });
-      setBalance((Number(balanceInOctas) / 100000000).toFixed(2));
+      setBalance((Number(balanceInOctas) / 100000000).toString());
     } catch (err) { setBalance('0.00'); }
   };
 
@@ -880,12 +998,6 @@ function App() {
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)', padding: '2rem', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.5rem', background: 'white', padding: '0.75rem 1.5rem', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
-            <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Network: {APTOS_CONFIG.network}</span>
-          </div>
-        </div>
 
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
           <ProfileSidebar

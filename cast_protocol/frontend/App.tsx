@@ -86,8 +86,8 @@ declare global {
 // ==================== CONFIG ====================
 const APTOS_CONFIG = new AptosConfig({ network: Network.TESTNET });
 const aptos = new Aptos(APTOS_CONFIG);
-const GOOGLE_CLIENT_ID = '305427741136-j3j4r125hp5sqp5ojjdvcf5oomerckfn.apps.googleusercontent.com';
-const MODULE_ADDRESS = '0x0e8ff60af3c4d82f19afae4e316e82a27bbfe9ab7f22e805e0a0b58034e8df15';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const MODULE_ADDRESS = import.meta.env.VITE_MODULE_ADDRESS;
 
 // ==================== SIGN IN COMPONENT ====================
 const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData, keylessAccount: KeylessAccount) => void }> = ({ onSignIn }) => {
@@ -548,7 +548,7 @@ const ProfileSidebar: React.FC<{
           onInstall={installBackupKey}
         />
       )}
-      <div style={{ width: '280px', background: 'white', borderRadius: '16px', padding: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', height: 'fit-content', position: 'sticky', top: '2rem' }}>
+      <div style={{ width: '280px', background: 'white', borderRadius: '16px', padding: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', position: 'sticky', top: '2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <img src={user.picture} alt={user.name} style={{ width: '100px', height: '100px', borderRadius: '50%', border: '4px solid #667eea', marginBottom: '1rem' }} />
           <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.2rem', color: '#1a202c' }}>{user.name}</h3>
@@ -859,10 +859,10 @@ const MainContent: React.FC<{
     return (
       <>
         {showCongrats && <CongratulationsModal channelName={createdChannelName} onClose={() => setShowCongrats(false)} />}
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px', background: 'white', borderRadius: '16px', padding: '2rem', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
-            <div style={{ color: '#718096' }}>Loading account information...</div>
+            <div style={{ color: '#718096', fontWeight: '500' }}>Checking your Channelz status...</div>
           </div>
         </div>
       </>
@@ -999,7 +999,7 @@ function App() {
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)', padding: '2rem', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
 
-        <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', gap: '2rem', alignItems: 'stretch' }}>
           <ProfileSidebar
             user={user}
             address={keylessAccountData.address}

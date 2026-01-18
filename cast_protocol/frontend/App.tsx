@@ -559,13 +559,15 @@ const ProfileSidebar: React.FC<{
     const proofBytes = proofSignature.toUint8Array();
 
     // Step 5: Build implementation data
+    // Serialize the keyless public key with variant prefix (3 = Keyless)
     const serializerForPK = new Serializer();
     serializerForPK.serializeU8(3); // Keyless variant inside AnyPublicKey
     (keylessAccount.publicKey as any).serialize(serializerForPK);
     const keylessPublicKeyBytes = serializerForPK.toUint8Array();
 
-    const backupPublicKeyAny = new AnyPublicKey(backupPublicKey);
-    const backupPublicKeyBytes = backupPublicKeyAny.toUint8Array();
+    // For upsert_ed25519_backup_key... the contract expects RAW Ed25519 bytes (32 bytes),
+    // NOT the AnyPublicKey wrapper (33 bytes).
+    const backupPublicKeyBytes = backupPublicKey.toUint8Array();
 
     const transaction = await aptos.transaction.build.simple({
       sender: keylessAccount.accountAddress,

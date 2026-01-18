@@ -10,7 +10,6 @@ import {
   MultiKeyAccount,
   Ed25519PrivateKey,
   AnyPublicKey,
-  Deserializer,
   Ed25519PublicKey,
   Hex,
 } from '@aptos-labs/ts-sdk';
@@ -397,7 +396,6 @@ const BackupKeyModal: React.FC<{
 
 // ==================== PROFILE SIDEBAR ====================
 // ==================== HELPERS ====================
-// ==================== HELPERS ====================
 async function resolveSigner(
   keylessAccount: KeylessAccount,
   backupPrivateKeyStr: string | null
@@ -410,89 +408,119 @@ async function resolveSigner(
 
     if (onChainAuthKey === localAuthKey) {
       // Not rotated, return standard KeylessAccount
+      console.log('Account not rotated, using standard KeylessAccount');
       return keylessAccount;
     }
 
     console.log('Account is rotated (MultiKey detected). Resolving signer...');
+    console.log('On-chain auth key:', onChainAuthKey);
+    console.log('Local auth key:', localAuthKey);
 
     // 2. If rotated, we need the Backup Public Key to construct the MultiKey
     let backupPublicKey: Ed25519PublicKey | null = null;
 
-    // Try A: From local storage/argument
+    // Try A: From local storage/argument (we have the private key)
     if (backupPrivateKeyStr) {
       try {
-        const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
-        if (rawKey) {
-          const backupAccount = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(rawKey) });
-          backupPublicKey = backupAccount.publicKey;
+        // Handle various formats: "ed25519-priv-0x...", "0x...", or raw hex
+        let rawKey = backupPrivateKeyStr.trim();
+        if (rawKey.startsWith('ed25519-priv-')) {
+          rawKey = rawKey.replace('ed25519-priv-', '');
         }
-      } catch (e) { console.warn('Invalid local backup key provided', e); }
+        // Ensure it starts with 0x for the SDK
+        if (!rawKey.startsWith('0x')) {
+          rawKey = '0x' + rawKey;
+        }
+
+        console.log('Attempting to derive backup public key from private key...');
+        const backupAccount = Account.fromPrivateKey({ 
+          privateKey: new Ed25519PrivateKey(rawKey) 
+        });
+        // Cast to Ed25519PublicKey since we know it's Ed25519
+        backupPublicKey = backupAccount.publicKey as Ed25519PublicKey;
+        console.log('Successfully derived backup public key:', backupPublicKey.toString());
+      } catch (e) { 
+        console.warn('Invalid local backup key provided:', e); 
+      }
     }
 
-    // Try B: From Transaction History (Recovery Mode)
+    // Try B: From localStorage backup_public_key (fallback)
+    if (!backupPublicKey) {
+      const savedPubKey = localStorage.getItem(`backup_public_key_${keylessAccount.accountAddress.toString()}`);
+      if (savedPubKey) {
+        try {
+          // The saved public key is in hex format
+          const pubKeyHex = savedPubKey.startsWith('0x') ? savedPubKey : `0x${savedPubKey}`;
+          backupPublicKey = new Ed25519PublicKey(pubKeyHex);
+          console.log('Recovered backup public key from localStorage');
+        } catch (e) {
+          console.warn('Failed to parse saved public key:', e);
+        }
+      }
+    }
+
+    // Try C: From Transaction History (Recovery Mode)
     if (!backupPublicKey) {
       console.log('No local backup key found. Attempting to recover Public Key from transaction history...');
-      const transactions = await aptos.getAccountTransactions({ accountAddress: keylessAccount.accountAddress, options: { limit: 100 } });
+      try {
+        const transactions = await aptos.getAccountTransactions({ 
+          accountAddress: keylessAccount.accountAddress, 
+          options: { limit: 100 } 
+        });
 
-      // Look for the rotation transaction
-      for (const tx of transactions) {
-        if (!('payload' in tx) || !('function' in tx.payload)) continue; // Type guard
+        // Look for the rotation transaction
+        for (const tx of transactions) {
+          if (!('payload' in tx) || !('function' in tx.payload)) continue;
 
-        // Check for specific function
-        if (tx.payload.function === '0x1::account::upsert_ed25519_backup_key_on_keyless_account') {
-          const args = tx.payload.arguments;
-          // Args: [keyless_pk, backup_pk, ...proof]
-          // Note: Arguments in API response are strings (hex)
-          if (args && args.length >= 2) {
-            const backupPkHex = args[1]; // 2nd argument
-            const backupPkBytes = Hex.fromHexString(backupPkHex).toUint8Array();
-            // Determine variant. Usually AnyPublicKey(Ed25519) is: 0x00 + 32 bytes
-            // But the contract arg might be just the raw PK bytes depending on implementation
-            // Standard AnyPublicKey serialized has prefix.
-
-            // If bytes length is 33 (1 prefix + 32 key), parse as AnyPublicKey or strip prefix
-            if (backupPkBytes.length === 33) {
-              const deserializer = new Deserializer(backupPkBytes);
-              const variant = deserializer.deserializeUleb128AsU32();
-              if (variant === 0) {
-                backupPublicKey = Ed25519PublicKey.deserialize(deserializer);
+          if (tx.payload.function === '0x1::account::upsert_ed25519_backup_key_on_keyless_account') {
+            const args = tx.payload.arguments;
+            if (args && args.length >= 2) {
+              const backupPkHex = args[1] as string;
+              console.log('Found backup PK in transaction:', backupPkHex);
+              
+              const backupPkBytes = Hex.fromHexString(backupPkHex).toUint8Array();
+              
+              // The contract receives raw 32-byte Ed25519 public key
+              if (backupPkBytes.length === 32) {
+                backupPublicKey = new Ed25519PublicKey(backupPkBytes);
+                console.log('Successfully recovered backup public key from tx history');
+              } else if (backupPkBytes.length === 33) {
+                // Has AnyPublicKey prefix, skip first byte
+                backupPublicKey = new Ed25519PublicKey(backupPkBytes.slice(1));
               }
-            } else if (backupPkBytes.length === 32) {
-              // Raw Ed25519
-              backupPublicKey = new Ed25519PublicKey(backupPkBytes);
-            } else {
-              // Try deserializing as AnyPublicKey just in case
-              try {
-                const deserializer = new Deserializer(backupPkBytes);
-                const anyPK = AnyPublicKey.deserialize(deserializer);
-                if (anyPK.publicKey instanceof Ed25519PublicKey) {
-                  backupPublicKey = anyPK.publicKey;
-                }
-              } catch (e) { console.warn('Failed to parse history PK', e); }
             }
+            if (backupPublicKey) break;
           }
-          if (backupPublicKey) break;
         }
+      } catch (e) {
+        console.warn('Failed to recover from transaction history:', e);
       }
     }
 
     if (!backupPublicKey) {
       console.warn('Could not recover backup public key. Transactions might fail with INVALID_AUTH_KEY.');
-      // Fallback: Return keyless (will fail on chain but better than crashing)
       return keylessAccount;
     }
 
     // 3. Construct MultiKey Account
-    // We strictly use 1-of-2 scheme [Keyless, Backup]
-    return MultiKeyAccount.fromPublicKeysAndSigners({
+    // The MultiKey is [KeylessPublicKey, Ed25519PublicKey] with 1-of-2 threshold
+    // We wrap the Ed25519PublicKey as AnyPublicKey for the SDK
+    console.log('Constructing MultiKeyAccount...');
+    console.log('Keyless public key:', keylessAccount.publicKey.toString());
+    console.log('Backup public key:', backupPublicKey.toString());
+
+    const multiKeyAccount = MultiKeyAccount.fromPublicKeysAndSigners({
       address: keylessAccount.accountAddress,
       publicKeys: [
         keylessAccount.publicKey,
-        backupPublicKey,
+        new AnyPublicKey(backupPublicKey),
       ],
       signaturesRequired: 1,
-      signers: [keylessAccount], // We only have the Keyless signer capability
+      signers: [keylessAccount], // We sign with the Keyless key
     });
+
+    console.log('MultiKeyAccount created successfully');
+    return multiKeyAccount;
 
   } catch (err) {
     console.warn('Error resolving MultiKey signer:', err);

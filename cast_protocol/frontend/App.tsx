@@ -10,6 +10,9 @@ import {
   MultiKeyAccount,
   Ed25519PrivateKey,
   AnyPublicKey,
+  Deserializer,
+  Ed25519PublicKey,
+  Hex,
 } from '@aptos-labs/ts-sdk';
 import { jwtDecode } from 'jwt-decode';
 //ed25519-priv-0xfc0e3afedec87d15b53bfd56e69eec07301ed96ab2eca6d9e50bf9a786c1ebfb
@@ -394,31 +397,103 @@ const BackupKeyModal: React.FC<{
 
 // ==================== PROFILE SIDEBAR ====================
 // ==================== HELPERS ====================
+// ==================== HELPERS ====================
 async function resolveSigner(
   keylessAccount: KeylessAccount,
   backupPrivateKeyStr: string | null
 ): Promise<KeylessAccount | MultiKeyAccount> {
-  if (!backupPrivateKeyStr) return keylessAccount;
-
   try {
-    const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
-    if (!rawKey) return keylessAccount;
+    // 1. Check if account is rotated on-chain
+    const accountInfo = await aptos.getAccountInfo({ accountAddress: keylessAccount.accountAddress });
+    const onChainAuthKey = accountInfo.authentication_key;
+    const localAuthKey = keylessAccount.accountAddress.toString();
 
-    const backupAccount = Account.fromPrivateKey({
-      privateKey: new Ed25519PrivateKey(rawKey),
-    });
+    if (onChainAuthKey === localAuthKey) {
+      // Not rotated, return standard KeylessAccount
+      return keylessAccount;
+    }
 
-    // NOTE: We MUST match the order expected on-chain (Keyless first).
-    // Using static constructor for better reliability with indices.
+    console.log('Account is rotated (MultiKey detected). Resolving signer...');
+
+    // 2. If rotated, we need the Backup Public Key to construct the MultiKey
+    let backupPublicKey: Ed25519PublicKey | null = null;
+
+    // Try A: From local storage/argument
+    if (backupPrivateKeyStr) {
+      try {
+        const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
+        if (rawKey) {
+          const backupAccount = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(rawKey) });
+          backupPublicKey = backupAccount.publicKey;
+        }
+      } catch (e) { console.warn('Invalid local backup key provided', e); }
+    }
+
+    // Try B: From Transaction History (Recovery Mode)
+    if (!backupPublicKey) {
+      console.log('No local backup key found. Attempting to recover Public Key from transaction history...');
+      const transactions = await aptos.getAccountTransactions({ accountAddress: keylessAccount.accountAddress, options: { limit: 100 } });
+
+      // Look for the rotation transaction
+      for (const tx of transactions) {
+        if (!('payload' in tx) || !('function' in tx.payload)) continue; // Type guard
+
+        // Check for specific function
+        if (tx.payload.function === '0x1::account::upsert_ed25519_backup_key_on_keyless_account') {
+          const args = tx.payload.arguments;
+          // Args: [keyless_pk, backup_pk, ...proof]
+          // Note: Arguments in API response are strings (hex)
+          if (args && args.length >= 2) {
+            const backupPkHex = args[1]; // 2nd argument
+            const backupPkBytes = Hex.fromHexString(backupPkHex).toUint8Array();
+            // Determine variant. Usually AnyPublicKey(Ed25519) is: 0x00 + 32 bytes
+            // But the contract arg might be just the raw PK bytes depending on implementation
+            // Standard AnyPublicKey serialized has prefix.
+
+            // If bytes length is 33 (1 prefix + 32 key), parse as AnyPublicKey or strip prefix
+            if (backupPkBytes.length === 33) {
+              const deserializer = new Deserializer(backupPkBytes);
+              const variant = deserializer.deserializeUleb128AsU32();
+              if (variant === 0) {
+                backupPublicKey = Ed25519PublicKey.deserialize(deserializer);
+              }
+            } else if (backupPkBytes.length === 32) {
+              // Raw Ed25519
+              backupPublicKey = new Ed25519PublicKey(backupPkBytes);
+            } else {
+              // Try deserializing as AnyPublicKey just in case
+              try {
+                const deserializer = new Deserializer(backupPkBytes);
+                const anyPK = AnyPublicKey.deserialize(deserializer);
+                if (anyPK.publicKey instanceof Ed25519PublicKey) {
+                  backupPublicKey = anyPK.publicKey;
+                }
+              } catch (e) { console.warn('Failed to parse history PK', e); }
+            }
+          }
+          if (backupPublicKey) break;
+        }
+      }
+    }
+
+    if (!backupPublicKey) {
+      console.warn('Could not recover backup public key. Transactions might fail with INVALID_AUTH_KEY.');
+      // Fallback: Return keyless (will fail on chain but better than crashing)
+      return keylessAccount;
+    }
+
+    // 3. Construct MultiKey Account
+    // We strictly use 1-of-2 scheme [Keyless, Backup]
     return MultiKeyAccount.fromPublicKeysAndSigners({
       address: keylessAccount.accountAddress,
       publicKeys: [
         keylessAccount.publicKey,
-        backupAccount.publicKey,
+        backupPublicKey,
       ],
       signaturesRequired: 1,
-      signers: [keylessAccount],
+      signers: [keylessAccount], // We only have the Keyless signer capability
     });
+
   } catch (err) {
     console.warn('Error resolving MultiKey signer:', err);
     return keylessAccount;
@@ -457,6 +532,7 @@ const ProfileSidebar: React.FC<{
     // Step 2: Get account info (sequence number and current auth key) for the proof
     const accountDataInfo = await aptos.getAccountInfo({ accountAddress: keylessAccount.accountAddress });
     const sequenceNumber = BigInt(accountDataInfo.sequence_number);
+    const currentAuthKeyBytes = Hex.fromHexString(accountDataInfo.authentication_key).toUint8Array();
 
     // Step 3: Construct the RotationProofChallenge message
     const typeInfoSerializer = new Serializer();
@@ -470,7 +546,7 @@ const ProfileSidebar: React.FC<{
     const challengeSerializer = new Serializer();
     challengeSerializer.serializeU64(sequenceNumber);
     challengeSerializer.serializeFixedBytes(keylessAccount.accountAddress.toUint8Array()); // originator
-    challengeSerializer.serializeFixedBytes(keylessAccount.accountAddress.toUint8Array()); // current_auth_key
+    challengeSerializer.serializeFixedBytes(currentAuthKeyBytes); // current_auth_key
     challengeSerializer.serializeBytes(backupPublicKey.toUint8Array()); // new_public_key
     const challengeBytes = challengeSerializer.toUint8Array();
 

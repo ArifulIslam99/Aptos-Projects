@@ -8,8 +8,12 @@ import {
   Account,
   Serializer,
   MultiKeyAccount,
-  Ed25519PrivateKey,
+  MultiKey,
   AnyPublicKey,
+  Ed25519PublicKey,
+  Ed25519PrivateKey,
+  Hex,
+  Deserializer,
 } from '@aptos-labs/ts-sdk';
 import { jwtDecode } from 'jwt-decode';
 //ed25519-priv-0xfc0e3afedec87d15b53bfd56e69eec07301ed96ab2eca6d9e50bf9a786c1ebfb
@@ -93,12 +97,9 @@ const MODULE_ADDRESS = import.meta.env.VITE_MODULE_ADDRESS;
 const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAccountData, keylessAccount: KeylessAccount) => void }> = ({ onSignIn }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [pepper, setPepper] = useState<string>(localStorage.getItem('test_pepper') || '');
   const ephemeralKeyPairRef = useRef<EphemeralKeyPair | null>(null);
 
-  useEffect(() => {
-    loadGoogleScript();
-  }, []);
+  useEffect(() => { loadGoogleScript(); }, []);
 
   const loadGoogleScript = () => {
     const script = document.createElement('script');
@@ -111,24 +112,21 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
 
   const initializeGoogleSignIn = () => {
     if (!window.google) return;
-
     const ephemeral = EphemeralKeyPair.generate();
     ephemeralKeyPairRef.current = ephemeral;
-
     window.google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
       callback: handleGoogleCallback,
       nonce: ephemeral.nonce,
     });
-
     const buttonDiv = document.getElementById('googleSignInButton');
     if (buttonDiv) {
       window.google.accounts.id.renderButton(buttonDiv, {
-        theme: 'filled_blue',
+        theme: 'filled_black',
         size: 'large',
-        text: 'signin_with',
+        text: 'continue_with',
         shape: 'pill',
-        width: 300
+        width: 250
       });
     }
   };
@@ -136,17 +134,9 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
   const handleGoogleCallback = async (response: GoogleCredentialResponse) => {
     setLoading(true);
     setError('');
-
     try {
-      if (pepper) {
-        localStorage.setItem('test_pepper', pepper);
-      } else {
-        localStorage.removeItem('test_pepper');
-      }
-
       const jwt = response.credential;
       const payload = jwtDecode<JWTPayload>(jwt);
-
       const userData: GoogleUser = {
         email: payload.email,
         name: payload.name,
@@ -154,15 +144,12 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
         sub: payload.sub,
       };
 
-      if (!ephemeralKeyPairRef.current) {
-        throw new Error('Ephemeral key pair not generated');
-      }
+      if (!ephemeralKeyPairRef.current) throw new Error('Ephemeral key pair not generated');
 
       const keylessAccountObj = await aptos.deriveKeylessAccount({
         jwt,
         ephemeralKeyPair: ephemeralKeyPairRef.current,
         uidKey: 'sub',
-        pepper: pepper ? (pepper.startsWith('0x') ? pepper : `0x${pepper}`) : undefined,
       });
 
       const accountData: KeylessAccountData = {
@@ -172,7 +159,6 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
 
       localStorage.setItem('keyless_account', JSON.stringify(accountData));
       onSignIn(userData, accountData, keylessAccountObj);
-
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError('Authentication failed: ' + errorMessage);
@@ -182,36 +168,43 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '2rem' }}>
-      <div style={{ background: 'white', borderRadius: '24px', padding: '3rem', maxWidth: '500px', width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', textAlign: 'center' }}>
-        <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>📺</div>
-        <h1 style={{ fontSize: '2.5rem', fontWeight: 'bold', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: '0.5rem' }}>Welcome to Channelz</h1>
-        <p style={{ color: '#666', fontSize: '1.1rem', marginBottom: '2rem' }}>Create your decentralized channel on Aptos blockchain</p>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #1a202c 0%, #2d3748 100%)', padding: '2rem' }}>
+      <div style={{ background: 'rgba(255, 255, 255, 0.95)', borderRadius: '32px', padding: '4rem 2rem', maxWidth: '480px', width: '100%', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
+        <style>
+          {`@keyframes float { 0% { transform: translateY(0px); } 50% { transform: translateY(-10px); } 100% { transform: translateY(0px); } }`}
+        </style>
+
+        <div style={{ fontSize: '6rem', marginBottom: '1.5rem', animation: 'float 4s ease-in-out infinite', filter: 'drop-shadow(0 10px 10px rgba(0,0,0,0.2))' }}>📺</div>
+
+        <h1 style={{ fontSize: '2.5rem', fontWeight: '800', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: '0.5rem', letterSpacing: '-0.025em' }}>
+          Channelz
+        </h1>
+        <p style={{ color: '#718096', fontSize: '1.1rem', marginBottom: '2.5rem', lineHeight: '1.6' }}>
+          Create and own your decentralized media channel on <span style={{ fontWeight: '600', color: '#667eea' }}>Aptos</span>.
+        </p>
 
         {error && (
-          <div style={{ padding: '1rem', background: '#fee', border: '1px solid #fcc', borderRadius: '12px', color: '#c33', marginBottom: '1.5rem', fontSize: '0.9rem' }}>⚠️ {error}</div>
+          <div style={{ padding: '0.75rem', background: '#fff5f5', borderLeft: '4px solid #f56565', borderRadius: '4px', color: '#c53030', marginBottom: '1.5rem', fontSize: '0.9rem', textAlign: 'left' }}>
+            {error}
+          </div>
         )}
 
         {loading ? (
           <div style={{ padding: '2rem' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
-            <div style={{ color: '#666' }}>Authenticating...</div>
+            <div style={{ width: '40px', height: '40px', border: '4px solid #e2e8f0', borderTop: '4px solid #667eea', borderRadius: '50%', margin: '0 auto 1rem', animation: 'spin 1s linear infinite' }}></div>
+            <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+            <div style={{ color: '#718096', fontWeight: '500' }}>Authenticating securely...</div>
           </div>
         ) : (
           <>
-            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: '600', color: '#64748b', marginBottom: '0.5rem', textAlign: 'left' }}>🧪 TEST SALT (HEX - OPTIONAL)</label>
-              <input
-                type="text"
-                value={pepper}
-                onChange={(e) => setPepper(e.target.value)}
-                placeholder="0x... (generates a fresh address)"
-                style={{ width: '100%', padding: '0.6rem', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '0.85rem', outline: 'none' }}
-              />
-              <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.4rem', textAlign: 'left' }}>Change this to get a new account address for testing.</p>
+            <div id="googleSignInButton" style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem', height: '50px' }}></div>
+            <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem', marginTop: '1.5rem' }}>
+              <p style={{ fontSize: '0.85rem', color: '#a0aec0' }}>
+                Powered by <strong>Aptos Keyless</strong>
+                <br />
+                No wallets or private keys needed.
+              </p>
             </div>
-            <div id="googleSignInButton" style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}></div>
-            <p style={{ fontSize: '0.9rem', color: '#999' }}>Powered by Aptos Keyless Authentication</p>
           </>
         )}
       </div>
@@ -219,7 +212,67 @@ const SignInScreen: React.FC<{ onSignIn: (user: GoogleUser, account: KeylessAcco
   );
 };
 
-// ==================== BACKUP KEY MODAL ====================
+// ==================== DEBUG INFO COMPONENT ====================
+// DebugInfo helper... (Hidden for now)
+/*
+const DebugInfo: React.FC<{
+  address: string;
+  keylessAccount: KeylessAccount | null;
+}> = ({ address, keylessAccount }) => {
+  const [info, setInfo] = useState<any>(null);
+
+  const fetchDebugInfo = async () => {
+    if (!keylessAccount) return;
+    try {
+      const accountInfo = await aptos.getAccountInfo({ accountAddress: keylessAccount.accountAddress });
+      const onChainAuthKey = accountInfo.authentication_key;
+      const localAuthKey = keylessAccount.accountAddress.toString();
+
+      const backupKeyStored = localStorage.getItem(`backup_public_key_${address}`);
+      const backupKeyInstalled = localStorage.getItem(`backup_key_installed_${address}`);
+
+      setInfo({
+        onChainAuthKey,
+        localAuthKey,
+        isRotated: onChainAuthKey !== localAuthKey,
+        backupKeyStored: !!backupKeyStored,
+        backupKeyInstalled,
+        sequenceNumber: accountInfo.sequence_number
+      });
+    } catch (e: any) {
+      setInfo({ error: e.message });
+    }
+  };
+
+  useEffect(() => { fetchDebugInfo(); }, [address, keylessAccount]);
+
+  if (!info) return null;
+
+  return (
+    <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#1a202c', borderRadius: '8px', fontSize: '0.7rem', color: '#a0aec0', fontFamily: 'monospace' }}>
+      <div style={{ fontWeight: 'bold', color: '#e2e8f0', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
+        <span>🐞 DEBUG DIAGNOSTICS</span>
+        <button onClick={fetchDebugInfo} style={{ border: 'none', background: 'none', color: '#63b3ed', cursor: 'pointer' }}>↻</button>
+      </div>
+
+      {info.error ? (
+        <div style={{ color: '#fc8181' }}>Error: {info.error}</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <div><span style={{ color: '#63b3ed' }}>Rotated:</span> <span style={{ color: info.isRotated ? '#f6ad55' : '#68d391' }}>{info.isRotated ? 'YES (MultiKey)' : 'NO (SingleKey)'}</span></div>
+          <div style={{ wordBreak: 'break-all' }}><span style={{ color: '#718096' }}>Chain Auth:</span> {info.onChainAuthKey}</div>
+          <div style={{ wordBreak: 'break-all' }}><span style={{ color: '#718096' }}>Local Auth:</span> {info.localAuthKey}</div>
+          <div><span style={{ color: '#718096' }}>Backup Key in Storage:</span> {info.backupKeyStored ? 'YES' : 'NO'}</div>
+          <div><span style={{ color: '#718096' }}>Marked Installed:</span> {info.backupKeyInstalled ? 'TRUE' : 'FALSE'}</div>
+          <div><span style={{ color: '#718096' }}>Seq Num:</span> {info.sequenceNumber}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+*/
+// BackupKeyModal helper... (Hidden for now)
+/*
 const BackupKeyModal: React.FC<{
   privateKeyHex: string;
   onClose: () => void;
@@ -391,36 +444,206 @@ const BackupKeyModal: React.FC<{
     </div>
   );
 };
+*/
 
 // ==================== PROFILE SIDEBAR ====================
+// ==================== HELPERS ====================
 // ==================== HELPERS ====================
 async function resolveSigner(
   keylessAccount: KeylessAccount,
   backupPrivateKeyStr: string | null
 ): Promise<KeylessAccount | MultiKeyAccount> {
-  if (!backupPrivateKeyStr) return keylessAccount;
-
+  console.group('🔐 resolveSigner Debug');
   try {
-    const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
-    if (!rawKey) return keylessAccount;
+    const accountInfo = await aptos.getAccountInfo({ accountAddress: keylessAccount.accountAddress });
+    const onChainAuthKey = accountInfo.authentication_key;
+    const localAuthKey = keylessAccount.accountAddress.toString();
 
-    const backupAccount = Account.fromPrivateKey({
-      privateKey: new Ed25519PrivateKey(rawKey),
-    });
+    console.log('Auth Check:', { onChain: onChainAuthKey, local: localAuthKey });
 
-    // NOTE: We MUST match the order expected on-chain (Keyless first).
-    // Using static constructor for better reliability with indices.
-    return MultiKeyAccount.fromPublicKeysAndSigners({
-      address: keylessAccount.accountAddress,
-      publicKeys: [
-        keylessAccount.publicKey,
-        backupAccount.publicKey,
-      ],
-      signaturesRequired: 1,
-      signers: [keylessAccount],
-    });
+    if (onChainAuthKey === localAuthKey) {
+      console.log('✅ Account NOT rotated. Using KeylessAccount.');
+      console.groupEnd();
+      return keylessAccount;
+    }
+
+    console.warn('⚠️ Account IS rotated (MultiKey detected). Recovery needed.');
+
+    let backupPublicKey: Ed25519PublicKey | null = null;
+    let keylessPkFromHistory: any | null = null;
+    let source = 'NONE';
+
+    // 1. Recover Keys from History
+    console.log('🔍 Searching transaction history for rotation event...');
+    try {
+      const transactions = await aptos.getAccountTransactions({ accountAddress: keylessAccount.accountAddress, options: { limit: 100 } });
+
+      for (const tx of transactions) {
+        if (!('payload' in tx) || !('function' in tx.payload)) continue;
+
+        if (tx.payload.function.includes('upsert_ed25519_backup_key')) {
+          console.log('Found rotation tx:', tx.hash);
+          const args = tx.payload.arguments;
+          if (args && args.length >= 2) {
+            // Extract Keyless PK (Arg 0)
+            try {
+              const kHex = args[0];
+              const kBytes = Hex.fromHexString(kHex).toUint8Array();
+              console.log('History Keyless PK Bytes:', kBytes);
+
+              // Try to deserialize as AnyPublicKey (likely starts with 3)
+              const deserializer = new Deserializer(kBytes);
+              const anyPk = AnyPublicKey.deserialize(deserializer);
+              keylessPkFromHistory = anyPk; // This is an AnyPublicKey instance wrapping the KeylessPublicKey
+              console.log('✅ Successfully deserialized Keyless PK from history');
+            } catch (e) {
+              console.warn('Failed to deserialize Keyless PK from history bytes:', e);
+            }
+
+            // Extract Backup PK (Arg 1)
+            const backupPkHex = args[1];
+            const backupPkBytes = Hex.fromHexString(backupPkHex).toUint8Array();
+
+            if (backupPkBytes.length === 32) {
+              backupPublicKey = new Ed25519PublicKey(backupPkBytes);
+              source = 'HISTORY_RAW_32';
+            } else if (backupPkBytes.length === 33) {
+              try {
+                const deserializer = new Deserializer(backupPkBytes);
+                // Peek variant
+                const variant = backupPkBytes[0];
+                // Note: deserializer.deserializeUleb128AsU32() would actially consume it.
+                // But let's just assume AnyPublicKey format if generic deserialize fails
+                const anyPk = AnyPublicKey.deserialize(deserializer);
+                if (anyPk.publicKey instanceof Ed25519PublicKey) {
+                  backupPublicKey = anyPk.publicKey;
+                  source = 'HISTORY_ANY_33';
+                }
+              } catch (e) {
+                // Fallback unique logic for Ed25519
+                try {
+                  const d = new Deserializer(backupPkBytes);
+                  if (d.deserializeUleb128AsU32() === 0) {
+                    backupPublicKey = Ed25519PublicKey.deserialize(d);
+                    source = 'HISTORY_ANY_33_MANUAL';
+                  }
+                } catch (e2) { }
+              }
+            }
+          }
+          if (backupPublicKey) break;
+        }
+      }
+    } catch (e) { console.error('History fetch failed:', e); }
+
+    // Backup Key Override from Local Arg
+    if (backupPrivateKeyStr) {
+      try {
+        const rawKey = backupPrivateKeyStr.replace('ed25519-priv-', '').trim();
+        const backupAccount = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(rawKey) });
+        backupPublicKey = backupAccount.publicKey;
+        source = 'PRIVATE_KEY_ARG (Override)';
+        console.log('✅ Used Local Private Key override');
+      } catch (e) { console.warn('Invalid local backup key provided', e); }
+    }
+
+    if (!backupPublicKey) {
+      console.error('❌ CRITICAL: Failed to recover Backup Public Key.');
+      console.groupEnd();
+      return keylessAccount;
+    }
+
+    // 2. Brute Force Discovery
+    console.log('🔄 Attempting Brute Force Auth Key Discovery...');
+
+    // Helper: Wrap in AnyPublicKey
+    const wrapAny = (k: any) => {
+      if (k instanceof AnyPublicKey) return k; // Already wrapped
+      return new AnyPublicKey(k);
+    };
+
+    // Helper: Unwrap to Raw (if possible)
+    const unwrapRaw = (k: any) => {
+      if (k instanceof AnyPublicKey) return k.publicKey;
+      return k;
+    };
+
+    // Candidates
+    const candidatesKeyless: any[] = [];
+    const candidatesBackup: any[] = [];
+
+    // A. Keyless Candidates
+    candidatesKeyless.push({ name: 'Local', key: keylessAccount.publicKey }); // Raw
+    if (keylessPkFromHistory) {
+      // keylessPkFromHistory is likely AnyPublicKey
+      candidatesKeyless.push({ name: 'History', key: unwrapRaw(keylessPkFromHistory) });
+    }
+
+    // B. Backup Candidates
+    candidatesBackup.push({ name: 'Backup', key: backupPublicKey });
+
+    let winningScheme: any = null;
+
+    // Iterate Combinations
+    for (const k of candidatesKeyless) {
+      for (const b of candidatesBackup) {
+        // We test 4 variants per pair:
+        // 1. [Raw, Raw]
+        // 2. [Any, Any]
+        // 3. [Raw, Any]
+        // 4. [Any, Raw] (unlikely but possible)
+        // AND we test 2 orders: [K, B] vs [B, K]
+
+        // Let's simplfy by building specific keys
+        const rawK = k.key;
+        const anyK = wrapAny(k.key);
+        const rawB = b.key;
+        const anyB = wrapAny(b.key);
+
+        const permutations = [
+          { name: `[${k.name}(Raw), ${b.name}(Raw)]`, keys: [rawK, rawB] },
+          { name: `[${k.name}(Any), ${b.name}(Any)]`, keys: [anyK, anyB] },
+          { name: `[${b.name}(Raw), ${k.name}(Raw)]`, keys: [rawB, rawK] }, // Reverse
+          { name: `[${b.name}(Any), ${k.name}(Any)]`, keys: [anyB, anyK] }, // Reverse
+          // Mixed
+          { name: `[${k.name}(Any), ${b.name}(Raw)]`, keys: [anyK, rawB] },
+          { name: `[${b.name}(Any), ${k.name}(Raw)]`, keys: [anyB, rawK] },
+        ];
+
+        for (const p of permutations) {
+          try {
+            const mk = new MultiKey({ publicKeys: p.keys, signaturesRequired: 1 });
+            const derivedAuthKey = mk.authKey().toString();
+            if (derivedAuthKey === onChainAuthKey) {
+              winningScheme = p;
+              break;
+            }
+          } catch (e) { }
+        }
+        if (winningScheme) break;
+      }
+      if (winningScheme) break;
+    }
+
+    if (winningScheme) {
+      console.log(`🎉 MATCH FOUND! Scheme: ${winningScheme.name}`);
+      console.groupEnd();
+
+      return MultiKeyAccount.fromPublicKeysAndSigners({
+        address: keylessAccount.accountAddress,
+        publicKeys: winningScheme.keys,
+        signaturesRequired: 1,
+        signers: [keylessAccount]
+      });
+    }
+
+    console.error('❌ FATAL: All Brute Force attempts failed.');
+    console.groupEnd();
+    return keylessAccount;
+
   } catch (err) {
-    console.warn('Error resolving MultiKey signer:', err);
+    console.error('resolveSigner Exception:', err);
+    console.groupEnd();
     return keylessAccount;
   }
 }
@@ -433,231 +656,142 @@ const ProfileSidebar: React.FC<{
   keylessAccount: KeylessAccount | null;
   onImportBackupKey: (key: string) => void;
 }> = ({ user, address, balance, onSignOut, keylessAccount, onImportBackupKey }) => {
-  const [showBackupModal, setShowBackupModal] = useState(false);
-  const [backupKeyInstalled, setBackupKeyInstalled] = useState(false);
-  const [addressCopied, setAddressCopied] = useState(false);
+  // Suppress warnings for unused props (kept for future feature restoration)
+  void keylessAccount;
+  void onImportBackupKey;
 
-  // Check if backup key is already installed (stored in localStorage)
-  useEffect(() => {
-    const installed = localStorage.getItem(`backup_key_installed_${address}`);
-    if (installed === 'true') {
-      setBackupKeyInstalled(true);
-    }
-  }, [address]);
-
-  const installBackupKey = async (): Promise<string> => {
-    if (!keylessAccount) {
-      throw new Error('Keyless account not available. Please sign in again.');
-    }
-
-    // Step 1: Generate new Ed25519 keypair for backup
-    const backupAccount = Account.generate();
-    const backupPublicKey = backupAccount.publicKey;
-
-    // Step 2: Get account info (sequence number and current auth key) for the proof
-    const accountDataInfo = await aptos.getAccountInfo({ accountAddress: keylessAccount.accountAddress });
-    const sequenceNumber = BigInt(accountDataInfo.sequence_number);
-
-    // Step 3: Construct the RotationProofChallenge message
-    const typeInfoSerializer = new Serializer();
-    const addr0x1 = new Uint8Array(32);
-    addr0x1[31] = 1;
-    typeInfoSerializer.serializeFixedBytes(addr0x1);
-    typeInfoSerializer.serializeBytes(new TextEncoder().encode("account")); // module_name
-    typeInfoSerializer.serializeBytes(new TextEncoder().encode("RotationProofChallenge")); // struct_name
-    const typeInfoBytes = typeInfoSerializer.toUint8Array();
-
-    const challengeSerializer = new Serializer();
-    challengeSerializer.serializeU64(sequenceNumber);
-    challengeSerializer.serializeFixedBytes(keylessAccount.accountAddress.toUint8Array()); // originator
-    challengeSerializer.serializeFixedBytes(keylessAccount.accountAddress.toUint8Array()); // current_auth_key
-    challengeSerializer.serializeBytes(backupPublicKey.toUint8Array()); // new_public_key
-    const challengeBytes = challengeSerializer.toUint8Array();
-
-    const messageToSign = new Uint8Array(typeInfoBytes.length + challengeBytes.length);
-    messageToSign.set(typeInfoBytes);
-    messageToSign.set(challengeBytes, typeInfoBytes.length);
-
-    // Step 4: Sign the message with the backup key to create the proof
-    const proofSignature = backupAccount.sign(messageToSign);
-    const proofBytes = proofSignature.toUint8Array();
-
-    // Step 5: Build implementation data
-    const serializerForPK = new Serializer();
-    serializerForPK.serializeU8(3); // Keyless variant inside AnyPublicKey
-    (keylessAccount.publicKey as any).serialize(serializerForPK);
-    const keylessPublicKeyBytes = serializerForPK.toUint8Array();
-
-    const backupPublicKeyAny = new AnyPublicKey(backupPublicKey);
-    const backupPublicKeyBytes = backupPublicKeyAny.toUint8Array();
-
-    const transaction = await aptos.transaction.build.simple({
-      sender: keylessAccount.accountAddress,
-      data: {
-        function: '0x1::account::upsert_ed25519_backup_key_on_keyless_account',
-        typeArguments: [],
-        functionArguments: [
-          keylessPublicKeyBytes,
-          backupPublicKeyBytes,
-          proofBytes,
-        ],
-      },
-    });
-
-    // Step 6: Sign and Submit using existing backup key if available (allows rotation repair)
-    const savedAccount = localStorage.getItem('keyless_account');
-    let existingBackupKey = null;
-    if (savedAccount) {
-      const parsed = JSON.parse(savedAccount);
-      existingBackupKey = parsed.backupPrivateKey;
-    }
-    const signer = await resolveSigner(keylessAccount, existingBackupKey || null);
-
-    const committedTxn = await aptos.signAndSubmitTransaction({
-      signer,
-      transaction,
-    });
-
-    // Step 7: Wait for confirmation
-    await aptos.waitForTransaction({ transactionHash: committedTxn.hash });
-
-    localStorage.setItem(`backup_key_installed_${address}`, 'true');
-    localStorage.setItem(`backup_public_key_${address}`, backupPublicKey.toString());
-    setBackupKeyInstalled(true);
-
-    const fullKey = backupAccount.privateKey.toString();
-    // Automatically "connect" and update parent state
-    onImportBackupKey(fullKey);
-
-    return fullKey;
-  };
-
+  // Hard Reset: Clears storage to allow 'fresh' login attempts (requires email alias for new address)
   const handleResetApp = () => {
-    if (window.confirm('This will clear all local storage and sign you out. Your blockchain account will NOT be deleted. Proceed?')) {
+    if (confirm('To create a TRULY fresh account, sign in with a different email (e.g., user+test1@gmail.com). clearing local state now...')) {
       localStorage.clear();
       window.location.reload();
     }
   };
 
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <>
-      {showBackupModal && (
-        <BackupKeyModal
-          privateKeyHex=""
-          onClose={() => setShowBackupModal(false)}
-          onInstall={installBackupKey}
-        />
-      )}
-      <div style={{ width: '280px', background: 'white', borderRadius: '16px', padding: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', position: 'sticky', top: '2rem' }}>
-        <div style={{ textAlign: 'center', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <img src={user.picture} alt={user.name} style={{ width: '100px', height: '100px', borderRadius: '50%', border: '4px solid #667eea', marginBottom: '1rem' }} />
-          <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.2rem', color: '#1a202c' }}>{user.name}</h3>
-          <p style={{ margin: 0, fontSize: '0.85rem', color: '#718096' }}>{user.email}</p>
-        </div>
+      {/* Fancy CSS Styles for Profile */}
+      <style>
+        {`
+          @keyframes float { 0% { transform: translateY(0px); } 50% { transform: translateY(-8px); } 100% { transform: translateY(0px); } }
+          @keyframes glow { 0% { box-shadow: 0 0 5px #667eea, 0 0 10px #667eea; } 50% { box-shadow: 0 0 20px #764ba2, 0 0 30px #764ba2; } 100% { box-shadow: 0 0 5px #667eea, 0 0 10px #667eea; } }
+          @keyframes gradient-x { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+          .profile-card { animation: fadeIn 0.6s ease-out; }
+          .avatar-container { animation: float 6s ease-in-out infinite; }
+          .fancy-button { 
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab); 
+            background-size: 400% 400%; 
+            animation: gradient-x 15s ease infinite;
+            transition: transform 0.2s;
+          }
+          .fancy-button:hover { transform: scale(1.02); }
+        `}
+      </style>
 
-        <div style={{ padding: '1rem', background: '#f7fafc', borderRadius: '12px', marginBottom: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#718096', marginBottom: '0.5rem', fontWeight: '600' }}>APTOS ADDRESS</div>
-          <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#2d3748', wordBreak: 'break-all' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(address);
-                  setAddressCopied(true);
-                  setTimeout(() => setAddressCopied(false), 2000);
-                }}
-                style={{
-                  marginLeft: '0.5rem',
-                  padding: '0.25rem 0.5rem',
-                  fontSize: '0.75rem',
-                  background: addressCopied ? '#10b981' : '#667eea',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  transition: 'background 0.2s'
-                }}
-              >
-                {addressCopied ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-          </div>
-        </div>
+      <div className="profile-card" style={{ width: '280px', background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)', borderRadius: '24px', padding: '2rem', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', position: 'sticky', top: '2rem', border: '1px solid rgba(255,255,255,0.5)' }}>
 
-        <div style={{ padding: '1rem', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', borderRadius: '12px', marginBottom: '1.5rem', color: 'white' }}>
-          <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem', opacity: 0.9 }}>BALANCE</div>
-          <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{balance} APT</div>
-        </div>
-
-        {backupKeyInstalled ? (
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ padding: '0.75rem', background: '#f0fdf4', border: '2px solid #86efac', borderRadius: '8px', textAlign: 'center' }}>
-              <span style={{ fontSize: '0.85rem', color: '#166534', fontWeight: '600' }}>✅ Backup Key Active</span>
-              <p style={{ fontSize: '0.75rem', color: '#15803d', margin: '0.25rem 0 0 0' }}>MultiKey Protection Enabled</p>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
-            <button
-              onClick={() => setShowBackupModal(true)}
-              disabled={!keylessAccount}
+        <div className="avatar-container" style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <div style={{ position: 'absolute', top: '-5px', left: '-5px', right: '-5px', bottom: '-5px', borderRadius: '50%', background: 'linear-gradient(45deg, #ff00cc, #3333ff)', zIndex: 0, filter: 'blur(8px)', opacity: 0.7, animation: 'glow 3s infinite' }}></div>
+            <img
+              src={user.picture}
+              alt={user.name}
               style={{
-                width: '100%',
-                padding: '0.75rem',
-                background: keylessAccount ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#cbd5e0',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: keylessAccount ? 'pointer' : 'not-allowed',
-                fontSize: '0.85rem',
-                fontWeight: '600'
+                width: '110px',
+                height: '110px',
+                borderRadius: '50%',
+                position: 'relative',
+                zIndex: 1,
+                border: '4px solid white',
+                objectFit: 'cover'
               }}
-            >
-              🔑 Install Backup Key
-            </button>
-            <button
-              onClick={() => {
-                const key = prompt('Please enter your existing backup private key (hex):');
-                if (key) {
-                  onImportBackupKey(key.trim());
-                  localStorage.setItem(`backup_key_installed_${address}`, 'true');
-                  setBackupKeyInstalled(true);
-                  alert('Backup key imported successfully! Your session is now synchronized.');
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '0.5rem',
-                background: 'transparent',
-                color: '#d97706',
-                border: '1px solid #fcd34d',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                fontWeight: '600'
-              }}
-            >
-              📥 Already have a key? Import
-            </button>
+            />
           </div>
-        )}
+          <h2 style={{ fontSize: '1.4rem', fontWeight: '800', color: '#1a202c', marginTop: '1rem', letterSpacing: '-0.5px' }}>
+            {user.name}
+          </h2>
+          <p style={{ color: '#718096', fontSize: '0.9rem', fontWeight: '500' }}>{user.email}</p>
+        </div>
 
-        <button onClick={onSignOut} style={{ width: '100%', padding: '0.75rem', background: '#f56565', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.5rem' }}>Sign Out</button>
+        <div style={{ padding: '1rem', background: '#f7fafc', borderRadius: '16px', marginBottom: '1.5rem', border: '1px solid #edf2f7' }}>
+          <div style={{ fontSize: '0.7rem', color: '#a0aec0', marginBottom: '0.5rem', fontWeight: '700', letterSpacing: '0.05em' }}>APTOS ADDRESS</div>
+          <div
+            onClick={handleCopy}
+            style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#4a5568', wordBreak: 'break-all', cursor: 'pointer', padding: '0.25rem', borderRadius: '4px', transition: 'background 0.2s' }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#e2e8f0'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            {address.slice(0, 6)}...{address.slice(-4)}
+          </div>
+          <div style={{ textAlign: 'right', marginTop: '0.25rem', fontSize: '0.7rem', color: copied ? '#10b981' : '#cbd5e0', transition: 'color 0.3s' }}>
+            {copied ? 'Copied!' : 'Click to copy'}
+          </div>
+        </div>
 
-        <button onClick={handleResetApp} style={{ width: '100%', padding: '0.5rem', background: 'transparent', color: '#718096', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '500', marginBottom: '1rem' }}>
-          🔄 Reset Application State
+        <div style={{ padding: '1.25rem', background: 'linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%)', borderRadius: '16px', marginBottom: '2rem', boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.05)' }}>
+          <div style={{ fontSize: '0.75rem', color: '#a0aec0', marginBottom: '0.25rem', fontWeight: '700', textTransform: 'uppercase' }}>Balance</div>
+          <div style={{ fontSize: '2rem', fontWeight: '800', background: 'linear-gradient(90deg, #30cfd0 0%, #330867 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            {balance} <span style={{ fontSize: '1rem', fontWeight: '600' }}>APT</span>
+          </div>
+        </div>
+
+        <button
+          onClick={onSignOut}
+          className="fancy-button"
+          style={{
+            width: '100%',
+            padding: '1rem',
+            color: 'white',
+            border: 'none',
+            borderRadius: '50px',
+            cursor: 'pointer',
+            fontSize: '1rem',
+            fontWeight: '700',
+            marginBottom: '1rem',
+            boxShadow: '0 4px 15px rgba(231, 60, 126, 0.4)'
+          }}
+        >
+          Sign Out
         </button>
 
-        <div style={{ padding: '0.75rem', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
-            <span style={{ fontSize: '0.7rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Network: {APTOS_CONFIG.network}</span>
+        <button
+          onClick={handleResetApp}
+          style={{
+            width: '100%',
+            padding: '0.75rem',
+            background: 'transparent',
+            color: '#cbd5e0',
+            border: '1px dashed #cbd5e0',
+            borderRadius: '12px',
+            cursor: 'pointer',
+            fontSize: '0.75rem',
+            fontWeight: '600',
+            transition: 'all 0.2s'
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#e53e3e'; e.currentTarget.style.color = '#e53e3e'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#cbd5e0'; e.currentTarget.style.color = '#cbd5e0'; }}
+        >
+          �️ Reset App State
+        </button>
+
+        <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: '#f0fff4', padding: '0.25rem 0.75rem', borderRadius: '20px', border: '1px solid #bbf7d0' }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e' }}></div>
+            <span style={{ fontSize: '0.65rem', fontWeight: '700', color: '#166534' }}>{APTOS_CONFIG.network}</span>
           </div>
         </div>
       </div>
     </>
   );
 };
+
 
 // ==================== CONGRATULATIONS MODAL ====================
 const CongratulationsModal: React.FC<{ channelName: string; onClose: () => void }> = ({ channelName, onClose }) => {
